@@ -51,8 +51,15 @@ export class BlueprintsV2Handler {
 		await playground.isConnected();
 		progressTracker.pipe(playground);
 
+		const compiled = await compileBlueprintV2(blueprint, {
+			progress: executionProgress,
+			onStepCompleted: onBlueprintStepCompleted,
+			onBlueprintValidated,
+			corsProxy,
+			gitAdditionalHeadersCallback,
+		});
 		const runtimeConfiguration =
-			await resolveRuntimeConfiguration(blueprint);
+			await resolveRuntimeConfiguration(compiled.declaration);
 		const declarativeOptOut =
 			await blueprintRequestsNoWordPress(blueprint);
 		const resolvedWordPressInstallMode =
@@ -75,7 +82,7 @@ export class BlueprintsV2Handler {
 			);
 		}
 		if (
-			(await hasBlueprintV2WordPressZipReference(blueprint)) &&
+			(await hasBlueprintV2WordPressZipReference(compiled.declaration)) &&
 			resolvedWordPressInstallMode !== 'download-and-install'
 		) {
 			throw new Error(
@@ -83,7 +90,7 @@ export class BlueprintsV2Handler {
 			);
 		}
 		const wordpressSource = await resolveBlueprintV2WordPressSource(
-			blueprint,
+			compiled.declaration,
 			{
 				corsProxy,
 				gitAdditionalHeadersCallback,
@@ -117,13 +124,6 @@ export class BlueprintsV2Handler {
 		collectPhpLogs(logger, playground);
 		onClientConnected?.(playground);
 
-		const compiled = await compileBlueprintV2(blueprint, {
-			progress: executionProgress,
-			onStepCompleted: onBlueprintStepCompleted,
-			onBlueprintValidated,
-			corsProxy,
-			gitAdditionalHeadersCallback,
-		});
 		await runBlueprintV2Steps(compiled, playground);
 
 		return playground;
