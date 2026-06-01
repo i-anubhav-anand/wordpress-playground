@@ -8,7 +8,6 @@ import type { PlaygroundDispatch, PlaygroundReduxState } from './store';
 import { selectActiveSite, setActiveSite } from './store';
 import { opfsSiteStorage } from '../opfs/opfs-site-storage';
 import {
-	type BlueprintV1,
 	BlueprintReflection,
 	type RuntimeConfiguration,
 	resolveRuntimeConfiguration,
@@ -591,7 +590,7 @@ async function prepareResolvedBlueprint(
 	const reflection = await BlueprintReflection.create(
 		resolvedBlueprint.blueprint
 	);
-	if (reflection.getVersion() === 1) {
+	if (reflection.getVersion() === 1 || reflection.getVersion() === 2) {
 		resolvedBlueprint.blueprint = await applyQueryOverrides(
 			resolvedBlueprint.blueprint,
 			playgroundUrlWithQueryApiArgs.searchParams
@@ -684,7 +683,7 @@ export interface SiteMetadata {
 
 	// @TODO: Accept any string as a php version?
 	runtimeConfiguration: RuntimeConfiguration;
-	originalBlueprint: BlueprintV1;
+	originalBlueprint: any;
 	originalBlueprintSource: BlueprintSource;
 }
 

@@ -105,6 +105,18 @@ CLI command loading a blueprint:
 npx @wp-playground/cli@latest server --blueprint=my-blueprint.json
 ```
 
+Blueprint v2 files are routed to the native TypeScript v2 runner automatically.
+Use `--mode` with v2 Blueprints when you need to control how the WordPress files
+are prepared:
+
+```bash
+npx @wp-playground/cli@latest server --blueprint=./blueprint-v2.json --mode=create-new-site
+```
+
+The supported v2 modes are `create-new-site`, `apply-to-existing-site`, and
+`mount-only`. Runtime options passed on the command line, such as `--php`,
+`--wp`, and `--login`, are merged into the Blueprint setup when possible.
+
 ### Mounting folders manually
 
 Some projects have a specific structure that requires a custom configuration; for example, your repository contains all the files in the `/wp-content/` folder. So in this scenario, you can specify to the Playground CLI that it will mount your project from that folder using the `--mount` flag.
@@ -247,7 +259,7 @@ The `server` command supports the following optional arguments:
 - `--outfile`: When building, write to this output file.
 - `--site-url=<url>`: Site URL to use for WordPress. Defaults to `http://127.0.0.1:{port}`.
 - `--wp=<version>`: The version of WordPress to use. Defaults to the latest.
-- `--php=<version>`: PHP version to use. Choices: `8.5`, `8.4`, `8.3`, `8.2`, `8.1`, `8.0`, `7.4`. Defaults to `8.5`.
+- `--php=<version>`: PHP version to use. Choices: `8.5`, `8.4`, `8.3`, `8.2`, `8.1`, `8.0`, `7.4`. Defaults to `8.3`.
 - `--auto-mount[=<path>]`: Automatically mount a directory. If no path is provided, mounts the current working directory. You can mount a WordPress directory, a plugin directory, a theme directory, a wp-content directory, or any directory containing PHP and HTML files.
 - `--mount=<mapping>`: Manually mount a directory (can be used multiple times). Format: `"/host/path:/vfs/path"`.
 - `--mount-before-install`: Mount a directory to the PHP runtime before WordPress installation (can be used multiple times). Format: `"/host/path:/vfs/path"`.

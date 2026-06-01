@@ -37,7 +37,7 @@ npx @wp-playground/cli@latest server
 
 ### Choosing a WordPress Version
 
-By default, the CLI loads the latest stable version of WordPress and PHP 8.0 due to its improved performance. To specify your preferred versions, you can use the flag `--wp=<version>` and `--php=<version>`:
+By default, the CLI loads the latest stable version of WordPress and PHP 8.3 due to its improved performance. To specify your preferred versions, you can use the flag `--wp=<version>` and `--php=<version>`:
 
 ```bash
  npx @wp-playground/cli@latest server --wp=6.8 --php=8.4
@@ -199,6 +199,22 @@ To use a Blueprint, create a file (e.g., my-blueprint.json) and run the followin
 ```bash
 npx @wp-playground/cli@latest server --blueprint=./my-blueprint.json
 ```
+
+Blueprint v2 declarations are routed to the native TypeScript v2 runner
+automatically. You can also select a v2 mode explicitly:
+
+```bash
+npx @wp-playground/cli@latest server --blueprint=./blueprint-v2.json --mode=create-new-site
+```
+
+Supported v2 modes are `create-new-site`, `apply-to-existing-site`, and
+`mount-only`. The CLI still accepts legacy `--wordpress-install-mode` for v1
+flows, but do not combine it with `--mode`.
+
+CLI runtime flags such as `--php`, `--wp`, and `--login` are applied as
+Blueprint overrides when possible. A v2 `phpVersion` or `wordpressVersion`
+declared in the Blueprint takes precedence unless the CLI option is explicitly
+provided.
 
 ## Programmatic Usage with JavaScript
 
