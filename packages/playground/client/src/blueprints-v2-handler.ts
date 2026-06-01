@@ -1,9 +1,6 @@
 import type { ProgressTracker } from '@php-wasm/progress';
 import type { PlaygroundClient, StartPlaygroundOptions } from '.';
-import {
-	collectPhpLogs,
-	logger,
-} from '@php-wasm/logger';
+import { collectPhpLogs, logger } from '@php-wasm/logger';
 import { consumeAPI } from '@php-wasm/universal';
 import {
 	BlueprintReflection,
@@ -58,10 +55,10 @@ export class BlueprintsV2Handler {
 			corsProxy,
 			gitAdditionalHeadersCallback,
 		});
-		const runtimeConfiguration =
-			await resolveRuntimeConfiguration(compiled.declaration);
-		const declarativeOptOut =
-			await blueprintRequestsNoWordPress(blueprint);
+		const runtimeConfiguration = await resolveRuntimeConfiguration(
+			compiled.declaration
+		);
+		const declarativeOptOut = await blueprintRequestsNoWordPress(blueprint);
 		const resolvedWordPressInstallMode =
 			wordpressInstallMode ??
 			(declarativeOptOut
@@ -90,7 +87,7 @@ export class BlueprintsV2Handler {
 			);
 		}
 		const wordpressSource = await resolveBlueprintV2WordPressSource(
-			compiled.declaration,
+			blueprint,
 			{
 				corsProxy,
 				gitAdditionalHeadersCallback,

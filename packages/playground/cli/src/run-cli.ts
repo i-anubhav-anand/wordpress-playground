@@ -341,8 +341,6 @@ export async function parseOptionsAndRunCLI(argsToParse: string[]) {
 					'apply-to-existing-site',
 					'mount-only',
 				],
-				// Remove the "hidden" flag once Blueprint V2 is fully supported
-				hidden: true,
 			},
 			phpmyadmin: {
 				describe:
@@ -428,6 +426,7 @@ export async function parseOptionsAndRunCLI(argsToParse: string[]) {
 					'Path to a Blueprint JSON file to execute on startup.',
 				type: 'string',
 			},
+			mode: sharedOptions['mode'],
 			login: {
 				describe: 'Auto-login as the admin user.',
 				type: 'boolean',
@@ -925,6 +924,7 @@ export interface RunCLIArgs {
 		| BlueprintV2Declaration
 		| BlueprintBundle;
 	command: 'start' | 'server' | 'run-blueprint' | 'build-snapshot' | 'php';
+	originalCommand?: RunCLIArgs['command'];
 	debug?: boolean;
 	login?: boolean;
 	mount?: Mount[];
@@ -1922,7 +1922,11 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer | void> {
 		process.exit(1);
 	});
 
-	if (server && args.command === 'start' && !args.skipBrowser) {
+	if (
+		server &&
+		(args.originalCommand || args.command) === 'start' &&
+		!args.skipBrowser
+	) {
 		openInBrowser(server.serverUrl);
 	}
 	return server;
@@ -1938,7 +1942,11 @@ function expandStartCommandArgs(
 	args: RunCLIArgs & { reset?: boolean },
 	cliOutput: CLIOutput
 ): RunCLIArgs {
-	let newArgs = { ...args, command: 'server' };
+	let newArgs: RunCLIArgs = {
+		...args,
+		command: 'server',
+		originalCommand: args.command,
+	};
 
 	/**
 	 * Enable auto-mount unless explicitly disabled via `--no-auto-mount`.
@@ -1953,7 +1961,7 @@ function expandStartCommandArgs(
 	// Scrub both the camelCase and dashed forms yargs-parser emits so a
 	// stale boolean can't leak into downstream consumers that read either.
 	delete newArgs.autoMount;
-	delete (newArgs as Record<string, unknown>)['auto-mount'];
+	delete (newArgs as unknown as Record<string, unknown>)['auto-mount'];
 
 	if (autoMountEnabled) {
 		newArgs.autoMount = path.resolve(process.cwd(), newArgs['path'] ?? '');
@@ -1967,6 +1975,14 @@ function expandStartCommandArgs(
 			newArgs['mount-before-install'] || [],
 			'/wordpress'
 		) || getMountForVfsPath(newArgs.mount || [], '/wordpress');
+	if (
+		existingSiteRootMount?.autoMounted &&
+		newArgs.mode === 'create-new-site'
+	) {
+		throw new Error(
+			'Cannot use --mode=create-new-site with an auto-detected WordPress directory. Use --no-auto-mount, or choose --mode=apply-to-existing-site or --mode=mount-only.'
+		);
+	}
 
 	/**
 	 * Persist the site into a ~/.wordpress-playground/sites/<site-id> directory,
