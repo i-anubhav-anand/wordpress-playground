@@ -1,6 +1,7 @@
 import { GitIndex } from 'isomorphic-git/src/models/GitIndex.js';
 import type { SparseCheckoutObject } from './git-sparse-checkout';
 import pako from 'pako';
+import { redactSensitiveUrl } from '@php-wasm/util';
 const deflate = pako.deflate;
 
 type GitDirectoryRefType = 'branch' | 'tag' | 'commit' | 'refname';
@@ -113,6 +114,7 @@ function buildGitConfig(
 	}: { branchName?: string; partialCloneFilter?: string }
 ): string {
 	const repositoryFormatVersion = partialCloneFilter ? 1 : 0;
+	const displayRepoUrl = redactSensitiveUrl(repoUrl);
 	const lines = [
 		'[core]',
 		`\trepositoryformatversion = ${repositoryFormatVersion}`,
@@ -122,7 +124,7 @@ function buildGitConfig(
 		'\tignorecase = true',
 		'\tprecomposeunicode = true',
 		'[remote "origin"]',
-		`\turl = ${repoUrl}`,
+		`\turl = ${displayRepoUrl}`,
 		'\tfetch = +refs/heads/*:refs/remotes/origin/*',
 		'\tfetch = +refs/tags/*:refs/tags/*',
 	];
@@ -181,12 +183,10 @@ export async function createDotGitDirectory({
 	if (headInfo.branchRef && headInfo.branchName) {
 		gitFiles['.git/logs/HEAD'] = `ref: ${headInfo.branchRef}\n`;
 		gitFiles[`.git/${headInfo.branchRef}`] = `${commitHash}\n`;
-		gitFiles[
-			`.git/refs/remotes/origin/${headInfo.branchName}`
-		] = `${commitHash}\n`;
-		gitFiles[
-			'.git/refs/remotes/origin/HEAD'
-		] = `ref: refs/remotes/origin/${headInfo.branchName}\n`;
+		gitFiles[`.git/refs/remotes/origin/${headInfo.branchName}`] =
+			`${commitHash}\n`;
+		gitFiles['.git/refs/remotes/origin/HEAD'] =
+			`ref: refs/remotes/origin/${headInfo.branchName}\n`;
 	}
 
 	if (headInfo.tagName) {

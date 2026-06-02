@@ -18,6 +18,7 @@ import { collect } from 'isomorphic-git/src/internal-apis.js';
 import { parseUploadPackResponse } from 'isomorphic-git/src/wire/parseUploadPackResponse.js';
 import { ObjectTypeError } from 'isomorphic-git/src/errors/ObjectTypeError.js';
 import { Buffer as BufferPolyfill } from 'buffer';
+import { redactSensitiveUrl } from '@php-wasm/util';
 
 /**
  * Polyfills the Buffer class in the browser.
@@ -666,26 +667,6 @@ async function fetchObjects(
 		packfile: toUint8Array(packfile),
 		promisor: false,
 	};
-}
-
-function redactSensitiveUrl(url: string) {
-	try {
-		const parsed = new URL(url);
-		if (parsed.username) {
-			parsed.username = 'REDACTED';
-		}
-		if (parsed.password) {
-			parsed.password = 'REDACTED';
-		}
-		for (const [key] of parsed.searchParams) {
-			if (/token|key|secret|password|auth|signature/i.test(key)) {
-				parsed.searchParams.set(key, 'REDACTED');
-			}
-		}
-		return parsed.toString();
-	} catch {
-		return url;
-	}
 }
 
 async function extractGitObjectFromIdx(idx: GitPackIndex, objectHash: string) {
