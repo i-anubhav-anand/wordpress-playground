@@ -553,6 +553,11 @@ jobs:
             - uses: ./.github/actions/prepare-playground
             - name: Install Playwright Browser
               run: npx playwright install chromium --with-deps
+            - name: Install PHP cURL extension
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y php-curl
+                  php -m | grep -qi '^curl$'
             - name: Start dev server
               run: |
                   npm run dev > /tmp/playground-dev.log 2>&1 &
@@ -666,8 +671,8 @@ jobs:
 
         # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
         permissions:
-            contents: read  # Required to clone the repo.
-            pages: write    # Required to deploy to GitHub Pages.
+            contents: read # Required to clone the repo.
+            pages: write # Required to deploy to GitHub Pages.
             id-token: write # Required to verify the deployment originates from an appropriate source.
 
         # Deploy to the github-pages environment
