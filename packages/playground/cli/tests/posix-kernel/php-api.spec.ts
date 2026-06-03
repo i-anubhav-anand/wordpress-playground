@@ -8,7 +8,6 @@
 
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { join } from 'node:path';
-import { toPosixPath } from '@php-wasm/util';
 
 import { bootPosixKernelWordPress } from '../../src/posix-kernel/boot';
 import type { PosixKernelBootResult } from '../../src/posix-kernel/boot';
@@ -28,7 +27,7 @@ describe('--experimental-posix-kernel KernelLimitedPHPApi.run stdout capture', (
 	beforeAll(async () => {
 		tempDir = await createPosixKernelTempDir();
 		const wordPressRootHostPath = join(tempDir.hostPath, 'wordpress');
-		const wordPressRootKernelPath = toPosixPath(wordPressRootHostPath);
+		const wordPressRootKernelPath = `${tempDir.kernelPath}/wordpress`;
 		await prepareWordPressForPosixKernel({
 			wordPressRoot: wordPressRootHostPath,
 			wpVersionQuery: 'latest',
@@ -44,6 +43,7 @@ describe('--experimental-posix-kernel KernelLimitedPHPApi.run stdout capture', (
 		api = new KernelLimitedPHPApi({
 			serverUrl: booted.serverUrl,
 			wordPressRootHostPath,
+			wordPressRootKernelPath,
 			phpWasmPath: booted.runtime.phpWasmPath,
 			runtime: booted.runtime,
 		});
@@ -75,4 +75,15 @@ describe('--experimental-posix-kernel KernelLimitedPHPApi.run stdout capture', (
 			expect(results[i].text).toBe(markers[i]);
 		}
 	}, 120_000);
+
+	it('resolves scriptPath against the kernel-side doc root', async () => {
+		api.writeFile(
+			'/wordpress/script-path-probe.php',
+			`<?php echo "SCRIPTPATH_OK";`
+		);
+		const response = await api.run({
+			scriptPath: '/wordpress/script-path-probe.php',
+		});
+		expect(response.text).toBe('SCRIPTPATH_OK');
+	}, 60_000);
 });

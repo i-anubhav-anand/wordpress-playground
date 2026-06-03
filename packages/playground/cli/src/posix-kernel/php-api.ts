@@ -27,24 +27,21 @@ import type {
 	RmDirOptions,
 } from '@php-wasm/universal';
 import { PHPResponse } from '@php-wasm/universal';
-import { dirname, joinPaths, toPosixPath } from '@php-wasm/util';
+import { dirname, joinPaths } from '@php-wasm/util';
 import type { KernelRuntime } from './boot';
 
 import DEFINES_MU_PLUGIN_PHP from './wp-templates/playground-defines.php?raw';
 
 const VFS_DOCUMENT_ROOT = '/wordpress';
 
-/**
- * Match `/wordpress` only when it begins a fresh path token. Lookbehind
- * keeps host paths whose last segment is `wordpress` from being rewritten
- * a second time (the kernel's WP install lives in a directory called
- * `wordpress`, and `documentRoot` reports that host path).
- */
+// Lookbehind skips paths whose last segment is `wordpress` so we don't
+// rewrite documentRoot when it gets embedded back into PHP source.
 const VFS_DOCROOT_IN_CODE = /(?<![\w/-])\/wordpress(?=$|[/"'`\s\\,;:)$])/g;
 
 export interface KernelLimitedPHPApiOptions {
 	serverUrl: string;
 	wordPressRootHostPath: string;
+	wordPressRootKernelPath: string;
 	phpWasmPath: string;
 	runtime: KernelRuntime;
 }
@@ -52,23 +49,11 @@ export interface KernelLimitedPHPApiOptions {
 export class KernelLimitedPHPApi {
 	readonly absoluteUrl: string;
 	/**
-	 * The host doc-root, POSIX-shaped — `/Users/...` on macOS/Linux,
-	 * `/C/Users/...` on Windows. Not the VFS literal `/wordpress`.
-	 *
-	 * Blueprint v1 steps embed `documentRoot` into PHP source via
-	 * `phpVar`, which base64-encodes the value past
-	 * `translateVfsPathsInCode`'s rewrite. The embedded value is then
-	 * resolved by PHP running inside the kernel, whose musl-libc
-	 * `path[0] == '/'` "absolute" check rejects native `C:\...` paths;
-	 * the POSIX-shaped form passes that check and the kernel's
-	 * `NodePlatformIO.rewritePath` translates it back for `fs.*`.
+	 * Kernel-side WP doc root. Blueprint v1 embeds this into PHP source
+	 * (via `await playground.documentRoot`), so it must be a path the
+	 * kernel can `open()` — not the native host path.
 	 */
 	readonly documentRoot: string;
-	/**
-	 * Native host path used by this class's own Node `fs.*` calls
-	 * (read/write/mkdir/...). Equal to `documentRoot` on macOS/Linux;
-	 * differs on Windows.
-	 */
 	private readonly hostRoot: string;
 	private readonly runtime: KernelRuntime;
 	private readonly phpWasmBytes: ArrayBuffer;
@@ -83,7 +68,7 @@ export class KernelLimitedPHPApi {
 	constructor(options: KernelLimitedPHPApiOptions) {
 		this.absoluteUrl = options.serverUrl;
 		this.hostRoot = options.wordPressRootHostPath;
-		this.documentRoot = toPosixPath(this.hostRoot);
+		this.documentRoot = options.wordPressRootKernelPath;
 		this.runtime = options.runtime;
 		this.phpWasmBytes = readWasm(options.phpWasmPath);
 		this.definesPluginPath = joinPaths(
@@ -187,7 +172,7 @@ export class KernelLimitedPHPApi {
 				'php',
 				'-d',
 				'display_errors=stderr',
-				toPosixPath(this.toHost(request.scriptPath)),
+				this.toKernel(request.scriptPath),
 			];
 		} else {
 			throw new Error(
@@ -371,13 +356,8 @@ export class KernelLimitedPHPApi {
 				vfsPath.slice(VFS_DOCUMENT_ROOT.length)
 			);
 		}
-		// Blueprint v1 steps such as installPlugin derive absolute paths
-		// from `await playground.documentRoot` (POSIX-shaped on Windows,
-		// e.g. `/C/Users/.../wordpress`) and pass them back through
-		// writeFile / readFile. Translate those back to native `hostRoot`
-		// so Node's fs.* on Windows writes to the directory the kernel
-		// actually reads from. No-op on macOS/Linux where documentRoot
-		// equals hostRoot.
+		// Blueprint v1 round-trips paths through `documentRoot`; rewrite
+		// them back to hostRoot before Node fs.* sees them.
 		if (vfsPath === this.documentRoot) {
 			return this.hostRoot;
 		}
@@ -385,6 +365,19 @@ export class KernelLimitedPHPApi {
 			return joinPaths(
 				this.hostRoot,
 				vfsPath.slice(this.documentRoot.length)
+			);
+		}
+		return vfsPath;
+	}
+
+	private toKernel(vfsPath: string): string {
+		if (vfsPath === VFS_DOCUMENT_ROOT) {
+			return this.documentRoot;
+		}
+		if (vfsPath.startsWith(VFS_DOCUMENT_ROOT + '/')) {
+			return joinPaths(
+				this.documentRoot,
+				vfsPath.slice(VFS_DOCUMENT_ROOT.length)
 			);
 		}
 		return vfsPath;

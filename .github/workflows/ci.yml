@@ -143,15 +143,19 @@ jobs:
                   # the worker-thread init throws and the kernel host hangs
                   # on the "ready" message. Node 24's V8 13+ accepts it.
                   node-version: 24
-            # The wasm-posix-kernel/host bundle is consumed at runtime by the
-            # --experimental-posix-kernel tests via dynamic import. Its bundle
-            # leaves `fflate` and `fzstd` as external imports (declared in
-            # wasm-posix-kernel/host/package.json), so they must be installed
-            # in the submodule's local node_modules before the kernel-mode
-            # specs can resolve them.
-            - name: Install wasm-posix-kernel host runtime deps
+            # host/dist/ and binaries/ are gitignored upstream; build and
+            # fetch them so the kernel-mode specs find their artifacts.
+            - name: Build kandelo host
               shell: bash
-              run: npm install --omit=dev --no-package-lock --ignore-scripts --prefix wasm-posix-kernel/host
+              working-directory: kandelo/host
+              run: |
+                  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --no-audit --no-fund
+                  npm run build
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+            - name: Fetch kandelo wasm binaries
+              shell: bash
+              run: bash kandelo/scripts/fetch-binaries.sh --allow-stale
             - name: Run full test suite
               run: node node_modules/nx/bin/nx affected --target=test-playground-cli
     test-file-locking:

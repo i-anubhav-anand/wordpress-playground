@@ -8,7 +8,6 @@ import {
 import { RecommendedPHPVersion } from '@wp-playground/common';
 import { mkdirSync } from 'node:fs';
 import path from 'path';
-import { toPosixPath } from '@php-wasm/util';
 import { type Mount } from '@php-wasm/cli-util';
 import { type RunCLIArgs, mergeDefinedConstants } from '../run-cli';
 import type { CLIOutput } from '../cli-output';
@@ -28,7 +27,7 @@ export interface PosixKernelBootHandle {
 }
 
 /**
- * Boots Playground CLI under wasm-posix-kernel (nginx + PHP-FPM).
+ * Boots Playground CLI under kandelo (nginx + PHP-FPM).
  *
  * Counterpart to BlueprintsV1Handler / BlueprintsV2Handler. Bypasses the
  * Express server and PHP.wasm worker pool that those handlers
@@ -64,13 +63,10 @@ export class PosixKernelHandler {
 		const tempDir = await createPosixKernelTempDir();
 
 		let wordPressRootHostPath: string;
-		// nginx's POSIX argv parser refuses native `C:\...` paths even when
-		// the rest of the kernel would accept them, so we stage every
-		// kernel-facing path through `toPosixPath`. For a user-supplied
-		// `--mount`, we have to mkdir an empty placeholder under our
-		// own temp dir for the nginx `root` directive to point at —
-		// nginx accepts the placeholder; PHP reads the real bytes via
-		// the kernel's host-fs adapter using the host path.
+		// The kernel-facing WP root must live under a dir present in
+		// rootfs.vfs; arbitrary host paths don't qualify. We stage it
+		// under tempDir.kernelPath and let extraMounts in boot.ts route
+		// reads/writes back to the host path.
 		const nginxRootHostPath = path.join(tempDir.hostPath, 'wordpress');
 		if (wordPressMount) {
 			wordPressRootHostPath = path.resolve(wordPressMount.hostPath);
@@ -88,9 +84,9 @@ export class PosixKernelHandler {
 				throw e;
 			}
 		}
-		const wordPressRootKernelPath = toPosixPath(wordPressRootHostPath);
+		const wordPressRootKernelPath = `${tempDir.kernelPath}/wordpress`;
 
-		this.cliOutput.print(`Booting WordPress under wasm-posix-kernel...`);
+		this.cliOutput.print(`Booting WordPress under kandelo...`);
 
 		let booted: Awaited<ReturnType<typeof bootPosixKernelWordPress>>;
 		try {
@@ -119,6 +115,7 @@ export class PosixKernelHandler {
 		const api = new KernelLimitedPHPApi({
 			serverUrl: booted.serverUrl,
 			wordPressRootHostPath,
+			wordPressRootKernelPath,
 			phpWasmPath: booted.runtime.phpWasmPath,
 			runtime: booted.runtime,
 		});

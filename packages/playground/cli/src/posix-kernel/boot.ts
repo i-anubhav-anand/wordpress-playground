@@ -1,25 +1,26 @@
 /**
- * Boot WordPress backed by wasm-posix-kernel.
+ * Boot WordPress backed by kandelo.
  *
  * Spawns one Node `worker_thread` that owns the kernel; inside it,
  * php-fpm listens on a per-boot host-reserved port and nginx listens
  * on the user-chosen port (both via the kernel's TCP bridge to the
- * host — see `kernel-worker.ts:startTcpListener`). The returned
- * `runtime` lets blueprint v1 spawn additional `php.wasm` CLI
- * processes against the same worker, capturing their stdout/stderr.
+ * host). The returned `runtime` lets blueprint v1 spawn additional
+ * `php.wasm` CLI processes against the same worker, capturing their
+ * stdout/stderr.
  *
- * Path duality: callers pass two views of every directory the kernel
- * needs to see — a native `hostPath` (for our own Node `fs.*`) and a
- * `kernelPath` shaped via `@php-wasm/util:toPosixPath`. The kernel's
- * Node-side bridge (`NodePlatformIO.rewritePath`) reverses
- * `kernelPath` back to native form before each `fs.*` call. On
- * macOS/Linux the two paths are identical; on Windows the kernel
- * path is `/C/Users/...` while the host path is `C:\Users\...`. PHP-
- * FPM and nginx (musl-libc inside the kernel) only see the POSIX-
- * shaped form, so their `path[0] == '/'` "absolute" check passes.
+ * Callers pass two views of every directory the kernel touches: a
+ * native `hostPath` for our own `fs.*`, and a `kernelPath` staged under
+ * `/tmp/...` (a scratch mount in kandelo's rootfs.vfs) that extraMounts
+ * routes back to the host path.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import {
+	readFileSync,
+	writeFileSync,
+	mkdirSync,
+	chmodSync,
+	existsSync,
+} from 'node:fs';
 import { connect } from 'node:net';
 import { logger } from '@php-wasm/logger';
 import { joinPaths } from '@php-wasm/util';
@@ -64,7 +65,9 @@ export interface PosixKernelBootResult extends AsyncDisposable {
 }
 
 const FPM_BOOT_GRACE_MS = 2_000;
-const NGINX_READY_TIMEOUT_MS = 15_000;
+// Parallel fork pools cold-start several kernels at once; 15s was
+// tight enough to flake on busy boxes.
+const NGINX_READY_TIMEOUT_MS = 60_000;
 
 export async function bootPosixKernelWordPress(
 	options: PosixKernelBootOptions
@@ -79,6 +82,10 @@ export async function bootPosixKernelWordPress(
 	}
 
 	mkdirSync(options.tempDirHostPath, { recursive: true });
+	// FPM workers run as uid 99; the dir must be world-traversable for
+	// SCRIPT_FILENAME resolution and world-writable so router.php's
+	// first-request `@unlink` of the marker succeeds.
+	chmodSync(options.tempDirHostPath, 0o777);
 	for (const sub of ['client_body_temp', 'fastcgi_temp', 'logs']) {
 		mkdirSync(joinPaths(options.tempDirHostPath, sub), { recursive: true });
 	}

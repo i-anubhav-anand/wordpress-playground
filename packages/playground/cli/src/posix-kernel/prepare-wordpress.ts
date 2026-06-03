@@ -1,14 +1,20 @@
 /**
  * Materialize a self-contained WordPress document root for
  * `--experimental-posix-kernel`. TypeScript port of
- * `wasm-posix-kernel/examples/wordpress/setup.sh` that reuses the
+ * `kandelo/examples/wordpress/setup.sh` that reuses the
  * helpers Playground already ships (release resolver, cached download,
  * SQLite integration fetch, zip stream decoder).
  */
 import { EmscriptenDownloadMonitor } from '@php-wasm/progress';
 import { decodeZip } from '@php-wasm/stream-compression';
 import { resolveWordPressRelease } from '@wp-playground/wordpress';
-import { mkdirSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
+import {
+	chmodSync,
+	mkdirSync,
+	writeFileSync,
+	existsSync,
+	copyFileSync,
+} from 'node:fs';
 import { dirname, joinPaths } from '@php-wasm/util';
 import {
 	cachedDownload,
@@ -160,7 +166,7 @@ function ensureAutoLoginMuPlugin(wordPressRoot: string): void {
 /**
  * No-op `wp_mail()` mu-plugin. WP's `wp_new_blog_notification()` (run
  * from `wp_install()`) calls `wp_mail()` → PHPMailer →
- * `popen("sendmail …")`, and our wasm-posix-kernel's fork+exec lands
+ * `popen("sendmail …")`, and our kandelo's fork+exec lands
  * on a missing target and `exit_group(127)`s, killing the FPM worker
  * mid-install. Mu-plugins load before `wp-includes/pluggable.php`, so
  * declaring `wp_mail` here makes pluggable.php's `function_exists`
@@ -220,9 +226,12 @@ function ensureWpConfig(wordPressRoot: string): void {
 }
 
 function ensureDatabaseDir(wordPressRoot: string): void {
-	mkdirSync(joinPaths(wordPressRoot, 'wp-content/database'), {
-		recursive: true,
-	});
+	const databaseDir = joinPaths(wordPressRoot, 'wp-content/database');
+	mkdirSync(databaseDir, { recursive: true });
+	// SQLite drop-in's prepare_directory() wp_die()s if !is_writable;
+	// FPM workers (uid 99) need world-write since HostFS maps host
+	// files to uid 0.
+	chmodSync(databaseDir, 0o777);
 }
 
 interface ExtractZipOptions {

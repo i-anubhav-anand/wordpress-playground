@@ -325,9 +325,9 @@ export async function parseOptionsAndRunCLI(argsToParse: string[]) {
 			'experimental-posix-kernel': {
 				describe:
 					'Run WordPress under nginx + PHP-FPM hosted by ' +
-					'wasm-posix-kernel instead of PHP.wasm. Requires a ' +
-					'wasm-posix-kernel checkout; set ' +
-					'WASM_POSIX_KERNEL_DIR to its absolute path.',
+					'kandelo instead of PHP.wasm. Requires a ' +
+					'kandelo checkout; set ' +
+					'KANDELO_DIR to its absolute path.',
 				type: 'boolean',
 				default: false,
 				hidden: true,
@@ -2087,7 +2087,7 @@ function openInBrowser(url: string): void {
 }
 
 /**
- * Boot WordPress under wasm-posix-kernel (nginx + PHP-FPM). Bypasses
+ * Boot WordPress under kandelo (nginx + PHP-FPM). Bypasses
  * the Express server and PHP.wasm worker pool entirely. Only the
  * `server` command is supported, and PHP.wasm-only flags
  * (xdebug, redis, memcached) are rejected.

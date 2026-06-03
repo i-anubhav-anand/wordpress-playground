@@ -1,5 +1,5 @@
 /**
- * Resolve the wasm-posix-kernel host package and binaries at runtime.
+ * Resolve the kandelo host package and binaries at runtime.
  *
  * The kernel project lives in a sibling repository, not as an npm
  * dependency. We dynamic-import the host class and locate the wasm
@@ -76,19 +76,19 @@ async function doLoadHostBridge(): Promise<HostBridge> {
 }
 
 function resolveKernelDir(): string {
-	const fromEnv = process.env['WASM_POSIX_KERNEL_DIR'];
+	const fromEnv = process.env['KANDELO_DIR'];
 	if (!fromEnv || fromEnv.trim() === '') {
 		throw new Error(
-			`WASM_POSIX_KERNEL_DIR is not set. ` +
-				`--experimental-posix-kernel requires a wasm-posix-kernel ` +
+			`KANDELO_DIR is not set. ` +
+				`--experimental-posix-kernel requires a kandelo ` +
 				`checkout containing 'host/dist/index.js' and the kernel ` +
-				`binaries. Set WASM_POSIX_KERNEL_DIR to its absolute path.`
+				`binaries. Set KANDELO_DIR to its absolute path.`
 		);
 	}
 	if (!existsSync(joinPaths(fromEnv, 'host'))) {
 		throw new Error(
-			`wasm-posix-kernel checkout not found at ${fromEnv}. ` +
-				`WASM_POSIX_KERNEL_DIR must point to a working tree that ` +
+			`kandelo checkout not found at ${fromEnv}. ` +
+				`KANDELO_DIR must point to a working tree that ` +
 				`contains 'host/dist/index.js' and the kernel binaries.`
 		);
 	}
@@ -108,7 +108,7 @@ function resolveKernelBinaries(kernelDir: string): PosixKernelBinaries {
 }
 
 /**
- * Mirror wasm-posix-kernel's `host/src/binary-resolver.ts` lookup:
+ * Mirror kandelo's `host/src/binary-resolver.ts` lookup:
  * `local-binaries/<rel>` first, then `binaries/<rel>`.
  */
 function requireBinary(kernelDir: string, relPath: string): string {
@@ -119,7 +119,7 @@ function requireBinary(kernelDir: string, relPath: string): string {
 		}
 	}
 	throw new Error(
-		`wasm-posix-kernel binary not found: ${relPath}. ` +
+		`kandelo binary not found: ${relPath}. ` +
 			`Looked under ${kernelDir}/local-binaries and ${kernelDir}/binaries. `
 	);
 }
@@ -130,7 +130,7 @@ async function loadNodeKernelHost(
 	const distEntry = joinPaths(kernelDir, 'host', 'dist', 'index.js');
 	if (!existsSync(distEntry)) {
 		throw new Error(
-			`wasm-posix-kernel host build not found at ${distEntry}. ` +
+			`kandelo host build not found at ${distEntry}. ` +
 				`Run 'npm install && npm run build' inside ${kernelDir}/host.`
 		);
 	}
