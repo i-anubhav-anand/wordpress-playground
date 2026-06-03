@@ -20,6 +20,8 @@ import {
 import { logger } from '@php-wasm/logger';
 import { setupPostMessageRelay } from '@php-wasm/web';
 import { startPlaygroundWeb } from '@wp-playground/client';
+import { ProgressTracker } from '@php-wasm/progress';
+import type { ProgressDetails, ProgressTrackerEvent } from '@php-wasm/progress';
 import type { PlaygroundClient } from '@wp-playground/remote';
 import { getRemoteUrl } from '../../config';
 import { setActiveSiteError } from './slice-ui';
@@ -47,6 +49,10 @@ export interface BootSiteClientOptions {
 	clearUrlAfterBlueprintApplied?: boolean;
 	/** Auto-login when WordPress is already installed */
 	autoLogin?: boolean;
+	/** Receive boot progress events from the Playground client */
+	onProgress?: (progress: ProgressDetails) => void;
+	/** Called when the iframe is ready to be shown */
+	onReady?: () => void;
 }
 
 export function bootSiteClient(
@@ -58,6 +64,8 @@ export function bootSiteClient(
 		signal,
 		clearUrlAfterBlueprintApplied = false,
 		autoLogin = false,
+		onProgress,
+		onReady,
 	} = options;
 
 	return async (
@@ -166,6 +174,7 @@ export function bootSiteClient(
 					getState,
 					signal,
 					mainTabStatus: tabInfo.mainTabStatus || 'missing',
+					onReady,
 				});
 				logger.info(
 					'Playground running in dependent mode - using the main tab worker'
@@ -240,12 +249,27 @@ export function bootSiteClient(
 					: 'download-and-install';
 
 		let playground: PlaygroundClient | undefined = undefined;
+		const progressTracker = new ProgressTracker();
+		progressTracker.addEventListener(
+			'progress',
+			(event: ProgressTrackerEvent) => {
+				onProgress?.({
+					progress: event.detail.progress,
+					caption: event.detail.caption,
+				});
+			}
+		);
+		progressTracker.addEventListener('done', () => {
+			onReady?.();
+		});
 		try {
 			await startPlaygroundWeb({
 				iframe: iframe!,
 				remoteUrl: getRemoteUrl().toString(),
 				scope: site.slug,
 				blueprint,
+				disableProgressBar: true,
+				progressTracker,
 				experimentalBlueprintsV2Runner:
 					!isWordPressInstalled &&
 					new URLSearchParams(window.location.search).get(
@@ -377,6 +401,7 @@ function bootDependentModeClient({
 	getState,
 	signal,
 	mainTabStatus,
+	onReady,
 }: {
 	siteSlug: string;
 	iframe: HTMLIFrameElement;
@@ -384,6 +409,7 @@ function bootDependentModeClient({
 	getState: () => PlaygroundReduxState;
 	signal: AbortSignal;
 	mainTabStatus: 'connected' | 'booting' | 'missing';
+	onReady?: () => void;
 }): void {
 	const remoteUrl = getRemoteUrl();
 	const scopedSiteUrl = `/scope:${encodeURIComponent(siteSlug)}/`;
@@ -414,6 +440,9 @@ function bootDependentModeClient({
 				changes: { url },
 			})
 		);
+	};
+	const markIframeReady = () => {
+		onReady?.();
 	};
 
 	const existingClient = selectClientInfoBySiteSlug(getState(), siteSlug);
@@ -453,9 +482,13 @@ function bootDependentModeClient({
 	);
 
 	iframe.addEventListener('load', updateUrlFromIframe);
+	iframe.addEventListener('load', markIframeReady, { once: true });
 	signal.addEventListener(
 		'abort',
-		() => iframe.removeEventListener('load', updateUrlFromIframe),
+		() => {
+			iframe.removeEventListener('load', updateUrlFromIframe);
+			iframe.removeEventListener('load', markIframeReady);
+		},
 		{ once: true }
 	);
 

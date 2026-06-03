@@ -90,12 +90,13 @@ export class BlueprintsHandler {
 			blueprint,
 			compiled
 		);
-		const resolvedWordPressInstallMode =
-			resolveWordPressInstallModeOrThrow({
+		const resolvedWordPressInstallMode = resolveWordPressInstallModeOrThrow(
+			{
 				v1PhpOnlyMode,
 				shouldInstallWordPress,
 				wordpressInstallMode,
-			});
+			}
+		);
 
 		let wpVersion = runtimeConfiguration.wpVersion;
 		let wordPressZip: ArrayBuffer | undefined;
@@ -149,15 +150,14 @@ export class BlueprintsHandler {
 
 		await compiled.run(playground);
 
-		if (
-			compiled.version === 1 &&
-			shouldPrefetchUpdateChecks(
+		if (compiled.version === 1) {
+			await prefetchWordPressUpdateChecks(
+				playground,
+				compiled.declaration,
 				runtimeConfiguration.wpVersion,
 				runtimeConfiguration.networking,
 				resolvedWordPressInstallMode
-			)
-		) {
-			await playground.prefetchUpdateChecks();
+			);
 		}
 
 		return playground;
@@ -223,6 +223,53 @@ function resolveWordPressInstallModeOrThrow({
 	return resolvedWordPressInstallMode;
 }
 
+async function prefetchWordPressUpdateChecks(
+	playground: PlaygroundClient,
+	declaration: BlueprintV1Declaration,
+	wpVersion: string,
+	networking: boolean,
+	wordpressInstallMode: WordPressInstallMode
+) {
+	if (
+		!shouldPrefetchUpdateChecks(wpVersion, networking, wordpressInstallMode)
+	) {
+		return;
+	}
+
+	if (isWpAdminLandingPage(declaration)) {
+		await playground.prefetchUpdateChecks();
+		return;
+	}
+
+	// Keep update checks outside the frontend boot critical path. Admin pages
+	// need the result sooner, but frontend pages can let the browser go idle.
+	const prefetch = () => playground.prefetchUpdateChecks();
+	if (globalThis.requestIdleCallback) {
+		globalThis.requestIdleCallback(prefetch, { timeout: 5000 });
+	} else {
+		setTimeout(prefetch, 0);
+	}
+}
+
+function isWpAdminLandingPage(declaration: BlueprintV1Declaration): boolean {
+	const landingPage = declaration.landingPage;
+	if (!landingPage) {
+		return false;
+	}
+
+	let landingPathname: string;
+	try {
+		landingPathname = new URL(landingPage, 'http://playground.local')
+			.pathname;
+	} catch {
+		return false;
+	}
+	return (
+		landingPathname === '/wp-admin' ||
+		landingPathname.startsWith('/wp-admin/')
+	);
+}
+
 function shouldPrefetchUpdateChecks(
 	wpVersion: string,
 	networking: boolean,
@@ -241,6 +288,12 @@ function shouldPrefetchUpdateChecks(
 	 * "4.9.26", etc. Non-numeric values like "nightly" or "trunk"
 	 * produce NaN, which Number.isFinite rejects — those fall
 	 * through to enabling prefetch (correct for dev builds).
+	 *
+	 * Prefetch only makes sense when WordPress is actually installed because
+	 * prefetchUpdateChecks() executes PHP that requires wp-load.php and calls
+	 * WordPress update-check APIs. In PHP-only mode
+	 * (`preferredVersions.wp: false`), wp-load.php doesn't exist and the
+	 * prefetch crashes the runtime.
 	 *
 	 * @see https://github.com/WordPress/wordpress-playground/pull/2295
 	 */

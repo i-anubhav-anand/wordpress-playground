@@ -12,12 +12,17 @@ All notable changes to this project are documented in this file by a CI job
 that runs on every NPM release. The file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 format.
 
-## [v3.1.35] (2026-05-25) 
+## [v3.1.36] (2026-06-01)
 
 
 
 
-## [v3.1.34] (2026-05-18) 
+## [v3.1.35] (2026-05-25)
+
+
+
+
+## [v3.1.34] (2026-05-18)
 
 ### PHP WebAssembly
 
