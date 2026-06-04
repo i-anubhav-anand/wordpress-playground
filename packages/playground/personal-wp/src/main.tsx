@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -6,14 +7,17 @@ import { Provider } from 'react-redux';
 import store from './lib/state/redux/store';
 import { Layout } from './components/layout';
 import { EnsurePlaygroundSite } from './components/ensure-playground-site';
-import {
-	DesktopAccessViewer,
-	getDesktopAccessSessionId,
-} from './components/desktop-access-viewer';
-import {
-	DesktopAccessConnect,
-	isDesktopAccessConnectRoute,
-} from './components/desktop-access-connect';
+
+const DesktopAccessViewer = lazy(() =>
+	import('./components/desktop-access-viewer').then((module) => ({
+		default: module.DesktopAccessViewer,
+	}))
+);
+const DesktopAccessConnect = lazy(() =>
+	import('./components/desktop-access-connect').then((module) => ({
+		default: module.DesktopAccessConnect,
+	}))
+);
 
 collectWindowErrors(logger);
 
@@ -22,9 +26,13 @@ const desktopAccessSessionId = getDesktopAccessSessionId();
 
 root.render(
 	isDesktopAccessConnectRoute() ? (
-		<DesktopAccessConnect />
+		<Suspense fallback={null}>
+			<DesktopAccessConnect />
+		</Suspense>
 	) : desktopAccessSessionId ? (
-		<DesktopAccessViewer sessionId={desktopAccessSessionId} />
+		<Suspense fallback={null}>
+			<DesktopAccessViewer sessionId={desktopAccessSessionId} />
+		</Suspense>
 	) : (
 		<Provider store={store}>
 			<EnsurePlaygroundSite>
@@ -33,3 +41,12 @@ root.render(
 		</Provider>
 	)
 );
+
+function getDesktopAccessSessionId(): string | null {
+	const params = new URLSearchParams(window.location.search);
+	return params.get('share');
+}
+
+function isDesktopAccessConnectRoute(): boolean {
+	return window.location.pathname === '/connect';
+}

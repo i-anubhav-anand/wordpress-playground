@@ -162,6 +162,7 @@ export async function startPlaygroundWeb(
 		iframe.src = remoteUrl;
 		iframe.addEventListener('load', resolve, false);
 	});
+	progressTracker.setCaption('Connecting to Playground runtime');
 
 	const handler = options.experimentalBlueprintsV2Runner
 		? new BlueprintsV2Handler(options)
