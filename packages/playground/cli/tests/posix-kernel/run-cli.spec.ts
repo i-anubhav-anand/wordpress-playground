@@ -1,19 +1,3 @@
-/**
- * Re-run a curated subset of `tests/run-cli.spec.ts` under
- * `--experimental-posix-kernel`. Each test re-uses the classic test's
- * body where possible, swapping only the `runCLI` invocation.
- *
- * Tests deliberately NOT mirrored:
- *   - PHP-version, custom --site-url, multi-instance symlinks, /tmp
- *     post-install mounts: kernel mode does not honor these flags yet.
- *   - auto-mount, verbosity, pathAliases, phpMyAdmin: not yet wired
- *     through kernel mode.
- *   - error handling (requestStreamed override): the classic test
- *     mechanism does not translate to nginx + FPM.
- *   - streaming responses: would mirror classic; medium value.
- *   - signal handling, worker count: classic worker pool concepts.
- */
-
 import http from 'node:http';
 import {
 	parseOptionsAndRunCLI,
@@ -61,8 +45,7 @@ describe(
 		test('should set WordPress version', async () => {
 			const { MinifiedWordPressVersionsList } =
 				await import('@wp-playground/wordpress-builds');
-			// Use the oldest non-legacy version. Legacy versions
-			// (< 5.0) require legacy PHP and can't boot on modern PHP.
+			// Legacy versions (< 5.0) need legacy PHP and can't boot here.
 			const oldestSupportedVersion = MinifiedWordPressVersionsList.filter(
 				(v) => parseFloat(v) >= 5
 			).pop()!;
@@ -72,12 +55,8 @@ describe(
 				port: 0,
 				wp: oldestSupportedVersion,
 			});
-			// The classic spec embeds a literal `/wordpress/wp-load.php`
-			// because in classic mode the VFS doc root really is
-			// `/wordpress`. Under the kernel handler nginx + FPM serve
-			// straight off the host filesystem with no VFS, so the
-			// hardcoded `/wordpress` prefix doesn't resolve. Interpolate
-			// the live `documentRoot` (the host path) instead.
+			// Kernel mode serves straight off the host fs — no VFS doc
+			// root — so interpolate the live `documentRoot`.
 			const docRoot = cliServer.playground.documentRoot;
 			await cliServer.playground.writeFile(
 				'/wordpress/version.php',
@@ -144,9 +123,7 @@ describe(
 		});
 
 		test('should use default site-url when not provided', async () => {
-			// Use port: 0 to dodge contention with the sibling
-			// tests/run-cli.spec.ts test that also wants 9500 — under
-			// vitest's file parallelism the two can race on Windows.
+			// port: 0 to dodge contention with the sibling classic spec.
 			await using cliServer = await runCLI({
 				command: 'server',
 				'experimental-posix-kernel': true,
@@ -288,9 +265,8 @@ describe(
 			const dummyUrl = new URL('/dummy.txt', cliServer.serverUrl);
 			const res = await new Promise<http.IncomingMessage>(
 				(resolve, reject) => {
-					// Use http.get instead of fetch so the redirect body
-					// (and Set-Cookie headers) are visible without auto-
-					// follow.
+					// http.get instead of fetch so Set-Cookie is visible
+					// without auto-following the redirect.
 					const req = http.get(
 						dummyUrl,
 						{
@@ -323,13 +299,8 @@ describe(
 				port: 0,
 			});
 
-			// The classic test uses `fetch()` and relies on Express
-			// middleware to maintain a server-side cookie jar. Under
-			// kernel mode every fetch() goes straight to nginx, so the
-			// cookie jar lives on KernelLimitedPHPApi.request() instead.
-			// Verify it persists Set-Cookie across two programmatic
-			// requests, mirroring the classic surface from a different
-			// angle.
+			// Kernel mode has no Express middleware cookie jar; the jar
+			// lives on KernelLimitedPHPApi.request() instead.
 			await cliServer.playground.writeFile(
 				'/wordpress/set-cookie.php',
 				'<?php setcookie("test_cookie", "hello", 0, "/"); echo "cookie set"; ?>'
@@ -368,10 +339,8 @@ describe(
 			});
 
 			try {
-				// Classic mode errors out on EADDRINUSE; kernel mode
-				// silently falls back to a free port via reserveFreePort().
-				// Verify the silent-fallback behavior — picks a different,
-				// usable port and the server is reachable on it.
+				// Kernel mode silently falls back to a free port via
+				// reserveFreePort() instead of erroring on EADDRINUSE.
 				await using cliServer = await runCLI({
 					command: 'server',
 					'experimental-posix-kernel': true,
@@ -391,3 +360,44 @@ describe(
 	},
 	60_000 * 5
 );
+
+describe('--experimental-posix-kernel flag validation', () => {
+	test('rejects non-server commands', async () => {
+		await expect(
+			runCLI({
+				command: 'build-snapshot' as any,
+				'experimental-posix-kernel': true,
+			} as any)
+		).rejects.toThrow(/only supports the "server" command/);
+	});
+
+	test('rejects --xdebug', async () => {
+		await expect(
+			runCLI({
+				command: 'server',
+				'experimental-posix-kernel': true,
+				xdebug: true,
+			} as any)
+		).rejects.toThrow(/--xdebug is not supported/);
+	});
+
+	test('rejects --redis', async () => {
+		await expect(
+			runCLI({
+				command: 'server',
+				'experimental-posix-kernel': true,
+				redis: true,
+			} as any)
+		).rejects.toThrow(/--redis is not supported/);
+	});
+
+	test('rejects --memcached', async () => {
+		await expect(
+			runCLI({
+				command: 'server',
+				'experimental-posix-kernel': true,
+				memcached: true,
+			} as any)
+		).rejects.toThrow(/--memcached is not supported/);
+	});
+});

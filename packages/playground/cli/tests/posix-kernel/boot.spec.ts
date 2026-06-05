@@ -1,9 +1,3 @@
-/**
- * Smoke test for `--experimental-posix-kernel`. Boots a minimal PHP
- * document root through kandelo + nginx + PHP-FPM, fetches
- * '/', and asserts the response.
- */
-
 import { describe, expect, it } from 'vitest';
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,8 +8,7 @@ import { runCLI } from '../../src/run-cli';
 describe('--experimental-posix-kernel', () => {
 	it('boots nginx + php-fpm in the kernel and serves a static PHP root', async () => {
 		const docRoot = mkdtempSync(join(tmpdir(), 'posix-kernel-smoke-'));
-		// mkdtemp's default 0700 blocks FPM's uid 99 from traversing
-		// to index.php; real WP installs are 0755.
+		// 0700 blocks FPM's uid 99 from traversing to index.php.
 		chmodSync(docRoot, 0o755);
 		writeFileSync(
 			join(docRoot, 'index.php'),

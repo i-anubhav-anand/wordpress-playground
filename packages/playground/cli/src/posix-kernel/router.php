@@ -1,25 +1,17 @@
 <?php
 /**
- * Single FastCGI entry point. The kernel-built nginx has no PCRE, so
- * it can't dispatch by extension; every request lands here, and this
- * script does the three-way split:
- *   1. Static files (CSS, JS, images, fonts) — served with their MIME.
- *   2. PHP files that exist on disk — included directly.
- *   3. Everything else — routed through WordPress's index.php.
+ * Single FastCGI entry point. The kernel-built nginx lacks PCRE, so it
+ * can't dispatch by extension — every request lands here and is routed
+ * to a static file, an existing PHP file, or WordPress's index.php.
  */
 
 $uri = urldecode(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
 $docRoot = $_SERVER['DOCUMENT_ROOT'];
 $file = $docRoot . $uri;
 
-// First-request middleware: mirrors run-cli.ts's classic-mode handler
-// that clears a stale `playground_auto_login_already_happened` cookie
-// on the first real request after boot. The marker file is created by
-// posix-kernel-handler.ts after ensureWordPressInstalled completes, so
-// the install probe never trips this branch. @unlink is atomic across
-// FPM workers — only the first request consumes the marker. We only
-// emit the 302 when the cookie is actually present, otherwise the
-// marker is consumed silently and the request falls through normally.
+// First-request middleware: clear a stale `playground_auto_login_already_happened`
+// cookie if present. @unlink is atomic, so only one FPM worker consumes
+// the marker. The handler arms it post-install so the install probe falls through.
 $firstRequestMarker = $_SERVER['PLAYGROUND_FIRST_REQUEST_MARKER'] ?? '';
 if ($firstRequestMarker !== '' && @unlink($firstRequestMarker)) {
     $cookieHeader = $_SERVER['HTTP_COOKIE'] ?? '';
@@ -32,10 +24,8 @@ if ($firstRequestMarker !== '' && @unlink($firstRequestMarker)) {
     }
 }
 
-// Apply Playground-defined constants (set via --define / --define-bool
-// / --define-number and persisted by KernelLimitedPHPApi.defineConstant)
-// before any user PHP runs. The same file is loaded as a WordPress
-// mu-plugin too; this branch covers bare PHP files that bypass WP.
+// Apply CLI-defined constants before bare PHP files that bypass WP.
+// The same file is also loaded by WordPress as a mu-plugin.
 $definesScript = $docRoot . '/wp-content/mu-plugins/0-playground-defines.php';
 
 if (is_file($definesScript)) {
@@ -77,10 +67,8 @@ if ($uri !== '/' && is_file($file)) {
 	}
 }
 
-// DirectoryIndex: a request like /wp-admin/ maps to a directory on
-// disk, not a file. Without this branch the request falls through to
-// the WP front-end index.php and the user sees the homepage instead
-// of the admin dashboard.
+// DirectoryIndex: /wp-admin/ etc. land on a directory; without this
+// they'd fall through to the WP front-end and miss the admin dashboard.
 if (is_dir($file)) {
 	$dirIndex = rtrim($file, '/') . '/index.php';
 	if (is_file($dirIndex)) {

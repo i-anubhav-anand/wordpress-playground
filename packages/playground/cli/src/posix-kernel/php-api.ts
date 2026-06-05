@@ -1,14 +1,3 @@
-/**
- * `LimitedPHPApi`-shaped surface against the kernel-resident WordPress.
- *
- * Backed by host fs (the kernel uses host fs directly, so writing through
- * Node and reading inside the kernel hit the same bytes), HTTP fetch
- * against nginx, and `php.wasm` CLI processes spawned through the kernel
- * runtime. `defineConstant` regenerates a mu-plugin so blueprint v1's
- * `login` / `defineWpConfigConsts` / `setSiteLanguage` propagate to every
- * request without restarting php-fpm.
- */
-
 import {
 	existsSync,
 	mkdirSync,
@@ -34,8 +23,8 @@ import DEFINES_MU_PLUGIN_PHP from './wp-templates/playground-defines.php?raw';
 
 const VFS_DOCUMENT_ROOT = '/wordpress';
 
-// Lookbehind skips paths whose last segment is `wordpress` so we don't
-// rewrite documentRoot when it gets embedded back into PHP source.
+// Lookbehind skips `/wordpress` when it's already prefixed (e.g. when
+// documentRoot itself contains the literal segment).
 const VFS_DOCROOT_IN_CODE = /(?<![\w/-])\/wordpress(?=$|[/"'`\s\\,;:)$])/g;
 
 export interface KernelLimitedPHPApiOptions {
@@ -49,9 +38,8 @@ export interface KernelLimitedPHPApiOptions {
 export class KernelLimitedPHPApi {
 	readonly absoluteUrl: string;
 	/**
-	 * Kernel-side WP doc root. Blueprint v1 embeds this into PHP source
-	 * (via `await playground.documentRoot`), so it must be a path the
-	 * kernel can `open()` — not the native host path.
+	 * Kernel-side WP doc root. Blueprint v1 embeds this into PHP source,
+	 * so it must be a path the kernel can `open()`.
 	 */
 	readonly documentRoot: string;
 	private readonly hostRoot: string;
@@ -79,8 +67,7 @@ export class KernelLimitedPHPApi {
 			this.hostRoot,
 			'wp-content/mu-plugins/0-playground-defines.json'
 		);
-		// Reuse a previous run's defines store so the same set of
-		// constants survives a CLI restart against a persisted doc root.
+		// Survive a CLI restart against a persisted doc root.
 		if (existsSync(this.definesStorePath)) {
 			try {
 				const parsed = JSON.parse(
@@ -357,7 +344,7 @@ export class KernelLimitedPHPApi {
 			);
 		}
 		// Blueprint v1 round-trips paths through `documentRoot`; rewrite
-		// them back to hostRoot before Node fs.* sees them.
+		// back to hostRoot before Node fs.* sees them.
 		if (vfsPath === this.documentRoot) {
 			return this.hostRoot;
 		}
@@ -393,9 +380,8 @@ function readWasm(path: string): ArrayBuffer {
 }
 
 function collectSetCookieHeaders(headers: Headers): string[] {
-	// Node 24's Headers exposes a non-standard getSetCookie() that
-	// preserves duplicates; fall back to splitting on `, <token>=` for
-	// older runtimes.
+	// Node 24's getSetCookie() preserves duplicates; older runtimes need
+	// the comma split.
 	const anyHeaders = headers as unknown as {
 		getSetCookie?: () => string[];
 	};

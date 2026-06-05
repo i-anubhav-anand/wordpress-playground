@@ -1,18 +1,14 @@
-/**
- * Temp dir helper for `--experimental-posix-kernel` mode.
- *
- * `hostPath` is the native path our own `fs.*` calls use. `kernelPath`
- * is the path the kernel sees — it must live under a directory present
- * in kandelo's rootfs.vfs, so we mint one under `/tmp/...` and let
- * extraMounts route it back to `hostPath`.
- */
-
 import { randomBytes } from 'node:crypto';
 import {
 	dir as tmpDir,
 	setGracefulCleanup as tmpSetGracefulCleanup,
 } from 'tmp-promise';
 
+/**
+ * `hostPath` is the native path (used by `fs.*`); `kernelPath` lives
+ * under `/tmp/...`, a dir present in kandelo's rootfs.vfs, and is
+ * routed back to `hostPath` by extraMounts.
+ */
 export interface PosixKernelTempDir {
 	hostPath: string;
 	kernelPath: string;

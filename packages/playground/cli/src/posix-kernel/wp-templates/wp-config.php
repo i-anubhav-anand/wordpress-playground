@@ -20,10 +20,8 @@ define('NONCE_SALT',       'playground-posix-kernel-dev');
 
 $table_prefix = 'wp_';
 
-// Conditional so the playground-defines mu-plugin (loaded earlier via
-// router.php) wins when --define / --define-bool / --define-number sets
-// these. Without the guard, wp-config.php's redefine triggers PHP
-// warnings that prepend HTML to JSON test responses.
+// Guards so CLI --define overrides (applied by the playground-defines
+// mu-plugin) win without tripping "constant already defined" warnings.
 if (!defined('WP_DEBUG')) {
     define('WP_DEBUG', true);
 }

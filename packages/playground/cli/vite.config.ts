@@ -245,18 +245,17 @@ export default defineConfig({
 		poolOptions: {
 			forks: {
 				// Cap concurrency so per-fork kandelo + nginx + php-fpm
-				// cold-starts stay within NGINX_READY_TIMEOUT_MS.
-				// minForks is set explicitly because the CPU-derived
-				// default would exceed maxForks and tinypool rejects it.
+				// cold-starts stay within NGINX_READY_TIMEOUT_MS. minForks
+				// is set explicitly because tinypool rejects a CPU-derived
+				// default that exceeds maxForks.
 				maxForks: 2,
 				minForks: 1,
 				execArgv: [
 					'--experimental-strip-types',
 					'--experimental-transform-types',
 					'--disable-warning=ExperimentalWarning',
-					// kandelo's kernel.wasm uses the WebAssembly exnref
-					// feature for syscall unwinding. Node 24's V8 has it
-					// behind a flag.
+					// kandelo's kernel.wasm needs WebAssembly exnref, which
+					// Node 24's V8 keeps behind a flag.
 					'--experimental-wasm-exnref',
 					// Use our own ESM loader to help resolve modules within the Worker script.
 					'--import',

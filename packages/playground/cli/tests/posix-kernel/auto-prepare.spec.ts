@@ -1,12 +1,7 @@
-/**
- * `--experimental-posix-kernel` without `--mount`: the CLI must
- * download WordPress, drop in SQLite Database Integration, write
- * wp-config.php, and serve the installer.
- */
-
 import { describe, expect, it } from 'vitest';
 
 import { runCLI } from '../../src/run-cli';
+import { stripLeadingDirPrefix } from '../../src/posix-kernel/prepare-wordpress';
 
 describe('--experimental-posix-kernel auto-prepare WordPress', () => {
 	it('downloads WordPress + SQLite and serves the installer when no /wordpress mount is given', async () => {
@@ -17,13 +12,45 @@ describe('--experimental-posix-kernel auto-prepare WordPress', () => {
 			wp: 'latest',
 		});
 
-		// Follow redirects: the first request triggers the kernel
-		// handler's first-request cookie-clear middleware (302 to the
-		// same URL). Reaching the front-page body proves PHP + SQLite
+		// Follow redirects: the first request triggers the cookie-clear
+		// middleware (302 to self). Reaching the body proves PHP + SQLite
 		// are alive on a freshly auto-prepared install.
 		const response = await fetch(cliServer.serverUrl);
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		expect(body.toLowerCase()).toMatch(/wordpress|wp-/);
 	}, 120_000);
+});
+
+describe('stripLeadingDirPrefix', () => {
+	it('strips an exact prefix', () => {
+		expect(stripLeadingDirPrefix('wordpress/index.php', 'wordpress')).toBe(
+			'index.php'
+		);
+	});
+
+	it('returns "" for the bare directory entry', () => {
+		expect(stripLeadingDirPrefix('wordpress/', 'wordpress')).toBe('');
+	});
+
+	it('strips a versioned prefix (plugin-x.y.z/...)', () => {
+		expect(
+			stripLeadingDirPrefix(
+				'sqlite-database-integration-2.1.16/load.php',
+				'sqlite-database-integration'
+			)
+		).toBe('load.php');
+	});
+
+	it('returns null for paths outside the prefix', () => {
+		expect(stripLeadingDirPrefix('other/foo.txt', 'wordpress')).toBeNull();
+	});
+
+	it('returns null for a similar-but-different prefix without trailing /', () => {
+		expect(stripLeadingDirPrefix('wordpressX/foo', 'wordpress')).toBeNull();
+	});
+
+	it('returns null for a versioned root with no slash', () => {
+		expect(stripLeadingDirPrefix('wordpress-1.0', 'wordpress')).toBeNull();
+	});
 });

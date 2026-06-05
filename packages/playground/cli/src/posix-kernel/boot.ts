@@ -1,19 +1,3 @@
-/**
- * Boot WordPress backed by kandelo.
- *
- * Spawns one Node `worker_thread` that owns the kernel; inside it,
- * php-fpm listens on a per-boot host-reserved port and nginx listens
- * on the user-chosen port (both via the kernel's TCP bridge to the
- * host). The returned `runtime` lets blueprint v1 spawn additional
- * `php.wasm` CLI processes against the same worker, capturing their
- * stdout/stderr.
- *
- * Callers pass two views of every directory the kernel touches: a
- * native `hostPath` for our own `fs.*`, and a `kernelPath` staged under
- * `/tmp/...` (a scratch mount in kandelo's rootfs.vfs) that extraMounts
- * routes back to the host path.
- */
-
 import {
 	readFileSync,
 	writeFileSync,
@@ -65,8 +49,8 @@ export interface PosixKernelBootResult extends AsyncDisposable {
 }
 
 const FPM_BOOT_GRACE_MS = 2_000;
-// Parallel fork pools cold-start several kernels at once; 15s was
-// tight enough to flake on busy boxes.
+// Parallel forks cold-start several kernels at once; 15s flaked on
+// busy boxes.
 const NGINX_READY_TIMEOUT_MS = 60_000;
 
 export async function bootPosixKernelWordPress(
@@ -74,17 +58,16 @@ export async function bootPosixKernelWordPress(
 ): Promise<PosixKernelBootResult> {
 	if (!existsSync(joinPaths(options.wordPressRootHostPath, 'index.php'))) {
 		throw new Error(
-			`No PHP entry point found at ${options.wordPressRootHostPath}/index.php. ` +
-				`The posix-kernel handler expects the document root to be ` +
-				`prepared (e.g. populated with WordPress) before calling ` +
+			`No PHP entry point at ${options.wordPressRootHostPath}/index.php. ` +
+				`Prepare the document root before calling ` +
 				`bootPosixKernelWordPress().`
 		);
 	}
 
 	mkdirSync(options.tempDirHostPath, { recursive: true });
-	// FPM workers run as uid 99; the dir must be world-traversable for
-	// SCRIPT_FILENAME resolution and world-writable so router.php's
-	// first-request `@unlink` of the marker succeeds.
+	// FPM workers run as uid 99: dir must be world-traversable for
+	// SCRIPT_FILENAME and world-writable for router.php's @unlink of
+	// the first-request marker.
 	chmodSync(options.tempDirHostPath, 0o777);
 	for (const sub of ['client_body_temp', 'fastcgi_temp', 'logs']) {
 		mkdirSync(joinPaths(options.tempDirHostPath, sub), { recursive: true });
@@ -97,17 +80,11 @@ export async function bootPosixKernelWordPress(
 	const phpFpmBytes = readWasm(bridge.binaries.phpFpmWasm);
 	const nginxBytes = readWasm(bridge.binaries.nginxWasm);
 
-	// Reserve a free host port for php-fpm. The kernel's TCP bridge
-	// (`kernel-worker.ts:startTcpListener`) translates a kernel-side
-	// `listen()` into a real `net.createServer().listen(port, "0.0.0.0")`
-	// — so two concurrently-booted kernels can't share a hard-coded
-	// 9000 without colliding with `EADDRINUSE`. The port is internal
-	// (only nginx-in-the-kernel talks to it via fastcgi_pass).
+	// kandelo's TCP bridge maps a kernel `listen()` to a real
+	// `net.createServer().listen(port, "0.0.0.0")`, so two concurrent
+	// kernels can't share a hard-coded fpm port.
 	const fpmPort = await reserveFreePort();
 
-	// Materialize the FastCGI router + php-fpm config from inlined
-	// `?raw` strings so the published CLI bundle is self-contained
-	// (no neighbouring .php / .conf source files in dist/).
 	writeFileSync(joinPaths(options.tempDirHostPath, 'router.php'), ROUTER_PHP);
 	const routerScriptKernelPath = joinPaths(
 		options.tempDirKernelPath,
@@ -121,11 +98,9 @@ export async function bootPosixKernelWordPress(
 		options.tempDirKernelPath,
 		'php-fpm.conf'
 	);
-	// The marker path is wired into nginx now, but the file is created
-	// later (by the handler, after the WP installer probe). If the file
-	// existed during the install probe, router.php would short-circuit
-	// the probe with a 302, defeating ensureWordPressInstalled's
-	// install.php detection.
+	// Path is wired into nginx now but the file is created later by the
+	// handler, after ensureWordPressInstalled — if it existed during the
+	// install probe, router.php would 302 it and defeat install detection.
 	const firstRequestMarkerHostPath = joinPaths(
 		options.tempDirHostPath,
 		'first-request-pending'
@@ -148,14 +123,12 @@ export async function bootPosixKernelWordPress(
 		template: NGINX_CONF_TEMPLATE,
 	});
 
-	// Time-multiplexed stdio capture. The kernel currently emits every
-	// stdout/stderr chunk with `pid: 0` (per-pid demux not yet wired), so
-	// we route bytes by who the active capture is at receive time.
-	// `spawnCapturing` serializes itself behind a promise chain, keeping
-	// at most one capture in flight. nginx/php-fpm log lines that fire
-	// while a capture is active will be pulled into that capture's
-	// buffer — fine because v1 callsites don't generate concurrent HTTP
-	// traffic during their `run`/`request` calls.
+	// kandelo emits every stdout/stderr chunk with pid=0 (no per-pid
+	// demux yet), so spawnCapturing serializes itself behind a chain
+	// and routes bytes to whichever capture is active at receive time.
+	// nginx/php-fpm log lines fired during a capture are absorbed into
+	// that capture's buffer — fine because v1 callsites don't issue
+	// concurrent HTTP traffic during run/request.
 	interface ActiveCapture {
 		stdout: Uint8Array[];
 		stderr: Uint8Array[];
@@ -216,8 +189,7 @@ export async function bootPosixKernelWordPress(
 			fpmConfKernelPath,
 			options.wordPressRootKernelPath
 		);
-		// FPM is kernel-internal (only nginx-in-the-kernel connects to
-		// it); probe the kernel's loopback bridge, not the user-chosen
+		// FPM is kernel-internal; probe loopback, not the user-chosen
 		// nginx bind host.
 		await waitForLoopback(DEFAULT_HOST, fpmPort, FPM_BOOT_GRACE_MS).catch(
 			() => {
@@ -263,8 +235,8 @@ export async function bootPosixKernelWordPress(
 					}
 				}
 			});
-			// Keep the chain alive even if a caller's promise rejects, so
-			// the next queued capture can still proceed.
+			// Keep the chain alive on rejection so the next queued capture
+			// can still proceed.
 			captureChain = next.catch(() => undefined);
 			return next;
 		},
@@ -329,8 +301,8 @@ function renderNginxConf(args: {
 		);
 	const outHostPath = joinPaths(args.tempDirHostPath, 'nginx.conf');
 	writeFileSync(outHostPath, rendered);
-	// Return the kernel-shaped path; the spawned nginx parses argv
-	// through musl-libc, which only treats `/`-rooted paths as absolute.
+	// Return the kernel path: nginx parses argv through musl, which only
+	// treats `/`-rooted paths as absolute.
 	return joinPaths(args.tempDirKernelPath, 'nginx.conf');
 }
 

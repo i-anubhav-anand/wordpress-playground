@@ -1,8 +1,6 @@
 <?php
-/**
- * Auto-login support for Playground CLI's --experimental-posix-kernel.
- * Mirrors the @wp-playground/wordpress 1-auto-login.php mu-plugin.
- */
+// Mirrors @wp-playground/wordpress's 1-auto-login.php mu-plugin.
+
 function playground_get_username_for_auto_login() {
     if ( defined('PLAYGROUND_AUTO_LOGIN_AS_USER') && !isset($_COOKIE['playground_auto_login_already_happened']) ) {
         return PLAYGROUND_AUTO_LOGIN_AS_USER;

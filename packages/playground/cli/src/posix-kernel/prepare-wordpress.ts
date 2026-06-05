@@ -1,10 +1,3 @@
-/**
- * Materialize a self-contained WordPress document root for
- * `--experimental-posix-kernel`. TypeScript port of
- * `kandelo/examples/wordpress/setup.sh` that reuses the
- * helpers Playground already ships (release resolver, cached download,
- * SQLite integration fetch, zip stream decoder).
- */
 import { EmscriptenDownloadMonitor } from '@php-wasm/progress';
 import { decodeZip } from '@php-wasm/stream-compression';
 import { resolveWordPressRelease } from '@wp-playground/wordpress';
@@ -49,8 +42,7 @@ export async function prepareWordPressForPosixKernel(
 	let wpVersion: string;
 
 	if (existsSync(joinPaths(wordPressRoot, 'wp-settings.php'))) {
-		// Don't ping the API again — the cached install is whatever
-		// version it was. Only resolve when we actually need the URL.
+		// Don't ping the release API for cached installs.
 		wpVersion = 'cached';
 		skipped = true;
 	} else {
@@ -83,14 +75,10 @@ export async function prepareWordPressForPosixKernel(
 }
 
 /**
- * Drive WP's installer over HTTP the first time the kernel boots a
- * fresh install. Idempotent: if the root probe is already a 200, no-op.
- *
- * Why HTTP rather than a programmatic `wp_install()`: a standalone
- * php.wasm CLI bootstrapping WordPress hangs the moment wp-load.php
- * starts loading the SQLite drop-in (the drop-in's connection setup
- * relies on per-request state nginx + php-fpm establish). Posting to
- * `/wp-admin/install.php` reuses the working FPM pipeline.
+ * Drive WP's installer over HTTP. Idempotent: a 200 root probe means
+ * already-installed. HTTP rather than programmatic `wp_install()` because
+ * a standalone php.wasm CLI hangs loading the SQLite drop-in, which
+ * needs the per-request state nginx + php-fpm establish.
  */
 export async function ensureWordPressInstalled(
 	api: KernelLimitedPHPApi
@@ -111,8 +99,7 @@ export async function ensureWordPressInstalled(
 		user_name: 'admin',
 		admin_password: 'password',
 		admin_password2: 'password',
-		// Mark `password` user-acknowledged-weak — without `pw_weak`
-		// install.php rejects it and re-renders the form.
+		// Without `pw_weak`, install.php rejects "password" and re-renders.
 		pw_weak: '1',
 		admin_email: 'admin@example.com',
 		blog_public: '1',
@@ -144,13 +131,6 @@ export async function ensureWordPressInstalled(
 	}
 }
 
-/**
- * Auto-login mu-plugin. Reads `PLAYGROUND_AUTO_LOGIN_AS_USER` (set by
- * the `login` blueprint step via `defineConstant()`) and signs the user
- * in on first request. Adapted from the `1-auto-login.php` mu-plugin
- * generated in `@wp-playground/wordpress`'s boot helpers, trimmed
- * because we don't have `/internal/shared/mu-plugins` here.
- */
 function ensureAutoLoginMuPlugin(wordPressRoot: string): void {
 	const path = joinPaths(
 		wordPressRoot,
@@ -164,13 +144,9 @@ function ensureAutoLoginMuPlugin(wordPressRoot: string): void {
 }
 
 /**
- * No-op `wp_mail()` mu-plugin. WP's `wp_new_blog_notification()` (run
- * from `wp_install()`) calls `wp_mail()` → PHPMailer →
- * `popen("sendmail …")`, and our kandelo's fork+exec lands
- * on a missing target and `exit_group(127)`s, killing the FPM worker
- * mid-install. Mu-plugins load before `wp-includes/pluggable.php`, so
- * declaring `wp_mail` here makes pluggable.php's `function_exists`
- * guard skip its own definition and the popen path is never reached.
+ * No-op wp_mail() mu-plugin. wp_install() → wp_new_blog_notification()
+ * calls PHPMailer → popen("sendmail"), which kandelo's fork+exec
+ * exit_group(127)s on, killing the FPM worker mid-install.
  */
 function ensureDisableWpMailMuPlugin(wordPressRoot: string): void {
 	const path = joinPaths(
@@ -228,9 +204,8 @@ function ensureWpConfig(wordPressRoot: string): void {
 function ensureDatabaseDir(wordPressRoot: string): void {
 	const databaseDir = joinPaths(wordPressRoot, 'wp-content/database');
 	mkdirSync(databaseDir, { recursive: true });
-	// SQLite drop-in's prepare_directory() wp_die()s if !is_writable;
-	// FPM workers (uid 99) need world-write since HostFS maps host
-	// files to uid 0.
+	// FPM workers (uid 99) need world-write: kandelo's HostFS maps host
+	// files to uid 0, and the SQLite drop-in wp_die()s if !is_writable.
 	chmodSync(databaseDir, 0o777);
 }
 
@@ -248,8 +223,7 @@ async function extractZipToDir(
 	destDir: string,
 	options: ExtractZipOptions = {}
 ): Promise<void> {
-	// `decodeZip` reads via a BYOB reader — needs a byte stream
-	// (`type: 'bytes'`), not a default stream.
+	// decodeZip reads via a BYOB reader, which requires `type: 'bytes'`.
 	const stream = new ReadableStream({
 		type: 'bytes',
 		start(controller) {
@@ -293,7 +267,10 @@ async function extractZipToDir(
 	}
 }
 
-function stripLeadingDirPrefix(path: string, dirName: string): string | null {
+export function stripLeadingDirPrefix(
+	path: string,
+	dirName: string
+): string | null {
 	const exactPrefix = `${dirName}/`;
 	if (path === exactPrefix) {
 		return '';

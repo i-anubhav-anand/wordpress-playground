@@ -324,10 +324,9 @@ export async function parseOptionsAndRunCLI(argsToParse: string[]) {
 			},
 			'experimental-posix-kernel': {
 				describe:
-					'Run WordPress under nginx + PHP-FPM hosted by ' +
-					'kandelo instead of PHP.wasm. Requires a ' +
-					'kandelo checkout; set ' +
-					'KANDELO_DIR to its absolute path.',
+					'Run WordPress under nginx + PHP-FPM hosted by kandelo ' +
+					'instead of PHP.wasm. Set KANDELO_DIR to the kandelo ' +
+					'checkout.',
 				type: 'boolean',
 				default: false,
 				hidden: true,
@@ -779,11 +778,7 @@ export async function parseOptionsAndRunCLI(argsToParse: string[]) {
 				process.off('SIGTERM', cleanUpCliAndExit);
 				await cliServer[Symbol.asyncDispose]();
 			},
-			// The escape hatch is only reachable from classic-mode tests;
-			// --experimental-posix-kernel callers use runCLI() directly.
-			[internalsKeyForTesting]: {
-				cliServer: cliServer as RunCLIServer,
-			},
+			[internalsKeyForTesting]: { cliServer },
 		};
 	} catch (e) {
 		console.error(e);
@@ -980,10 +975,8 @@ export interface RunCLIServer extends AsyncDisposable {
 }
 
 /**
- * Server returned when `--experimental-posix-kernel` is on. The
- * kernel-resident nginx is the front door, so there's no Node
- * `http.Server` and no `PHPWorker` pool to expose — only the URL,
- * a kernel-resident `LimitedPHPApi` shim, and a teardown handle.
+ * Server returned by `--experimental-posix-kernel`. Kernel-resident
+ * nginx is the front door, so no Node `http.Server` and no worker pool.
  */
 export interface PosixKernelRunCliServer extends AsyncDisposable {
 	serverUrl: string;
@@ -2086,12 +2079,6 @@ function openInBrowser(url: string): void {
 	});
 }
 
-/**
- * Boot WordPress under kandelo (nginx + PHP-FPM). Bypasses
- * the Express server and PHP.wasm worker pool entirely. Only the
- * `server` command is supported, and PHP.wasm-only flags
- * (xdebug, redis, memcached) are rejected.
- */
 async function runCLIWithPosixKernel(
 	args: RunCLIArgs
 ): Promise<PosixKernelRunCliServer> {

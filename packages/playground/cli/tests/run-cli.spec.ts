@@ -1948,7 +1948,8 @@ describe('other run-cli behaviors', () => {
 					'--port=0',
 					...cliArgs,
 				]);
-				const cliServer = cliResult[internalsKeyForTesting].cliServer;
+				const cliServer = cliResult[internalsKeyForTesting]
+					.cliServer as RunCLIServer;
 				return cliServer[internalsKeyForTesting].workerThreadCount;
 			} finally {
 				exitSpy.mockRestore();

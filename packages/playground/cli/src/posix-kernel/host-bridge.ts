@@ -1,19 +1,12 @@
 /**
- * Resolve the kandelo host package and binaries at runtime.
- *
- * The kernel project lives in a sibling repository, not as an npm
- * dependency. We dynamic-import the host class and locate the wasm
- * artifacts on disk so vite/esbuild won't try to bundle them.
- *
- * The checkout must contain a built `host/dist/index.js` and the
- * binaries under `local-binaries/` or `binaries/`.
+ * Resolve kandelo (sibling repo, not an npm dep) at runtime. Dynamic
+ * import keeps vite/esbuild from bundling its wasm artifacts.
  */
 
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { joinPaths } from '@php-wasm/util';
 
-/** Subset of NodeKernelHost's options the CLI uses. */
 export interface NodeKernelHostOptions {
 	maxWorkers?: number;
 	onStdout?: (pid: number, data: Uint8Array) => void;
@@ -79,18 +72,12 @@ function resolveKernelDir(): string {
 	const fromEnv = process.env['KANDELO_DIR'];
 	if (!fromEnv || fromEnv.trim() === '') {
 		throw new Error(
-			`KANDELO_DIR is not set. ` +
-				`--experimental-posix-kernel requires a kandelo ` +
-				`checkout containing 'host/dist/index.js' and the kernel ` +
-				`binaries. Set KANDELO_DIR to its absolute path.`
+			`KANDELO_DIR is not set. --experimental-posix-kernel needs ` +
+				`a kandelo checkout (host/dist/index.js + binaries).`
 		);
 	}
 	if (!existsSync(joinPaths(fromEnv, 'host'))) {
-		throw new Error(
-			`kandelo checkout not found at ${fromEnv}. ` +
-				`KANDELO_DIR must point to a working tree that ` +
-				`contains 'host/dist/index.js' and the kernel binaries.`
-		);
+		throw new Error(`kandelo checkout not found at ${fromEnv}.`);
 	}
 	return fromEnv;
 }
@@ -107,10 +94,7 @@ function resolveKernelBinaries(kernelDir: string): PosixKernelBinaries {
 	};
 }
 
-/**
- * Mirror kandelo's `host/src/binary-resolver.ts` lookup:
- * `local-binaries/<rel>` first, then `binaries/<rel>`.
- */
+// Mirrors kandelo's `host/src/binary-resolver.ts` lookup.
 function requireBinary(kernelDir: string, relPath: string): string {
 	for (const root of ['local-binaries', 'binaries']) {
 		const candidate = joinPaths(kernelDir, root, relPath);
@@ -119,8 +103,8 @@ function requireBinary(kernelDir: string, relPath: string): string {
 		}
 	}
 	throw new Error(
-		`kandelo binary not found: ${relPath}. ` +
-			`Looked under ${kernelDir}/local-binaries and ${kernelDir}/binaries. `
+		`kandelo binary not found: ${relPath} ` +
+			`(looked under ${kernelDir}/{local-binaries,binaries}).`
 	);
 }
 
@@ -130,8 +114,8 @@ async function loadNodeKernelHost(
 	const distEntry = joinPaths(kernelDir, 'host', 'dist', 'index.js');
 	if (!existsSync(distEntry)) {
 		throw new Error(
-			`kandelo host build not found at ${distEntry}. ` +
-				`Run 'npm install && npm run build' inside ${kernelDir}/host.`
+			`kandelo host build not found at ${distEntry}: ` +
+				`run 'npm install && npm run build' inside ${kernelDir}/host.`
 		);
 	}
 	const url = pathToFileURL(distEntry).href;

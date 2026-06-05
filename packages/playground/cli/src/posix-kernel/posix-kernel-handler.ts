@@ -27,12 +27,9 @@ export interface PosixKernelBootHandle {
 }
 
 /**
- * Boots Playground CLI under kandelo (nginx + PHP-FPM).
- *
- * Counterpart to BlueprintsV1Handler / BlueprintsV2Handler. Bypasses the
- * Express server and PHP.wasm worker pool that those handlers
- * orchestrate — kernel-resident nginx is the front door, so this handler
- * owns its own port and surfaces its own AsyncDisposable.
+ * Boots Playground CLI under kandelo (nginx + PHP-FPM). Counterpart to
+ * BlueprintsV{1,2}Handler; bypasses the Express server and PHP.wasm
+ * worker pool entirely.
  */
 export class PosixKernelHandler {
 	private args: RunCLIArgs;
@@ -63,10 +60,9 @@ export class PosixKernelHandler {
 		const tempDir = await createPosixKernelTempDir();
 
 		let wordPressRootHostPath: string;
-		// The kernel-facing WP root must live under a dir present in
-		// rootfs.vfs; arbitrary host paths don't qualify. We stage it
-		// under tempDir.kernelPath and let extraMounts in boot.ts route
-		// reads/writes back to the host path.
+		// Kernel-facing WP root must live under a dir present in
+		// rootfs.vfs; arbitrary host paths don't qualify. Stage under
+		// tempDir.kernelPath and let extraMounts route to the host path.
 		const nginxRootHostPath = path.join(tempDir.hostPath, 'wordpress');
 		if (wordPressMount) {
 			wordPressRootHostPath = path.resolve(wordPressMount.hostPath);
@@ -120,34 +116,22 @@ export class PosixKernelHandler {
 			runtime: booted.runtime,
 		});
 
-		// Apply --define / --define-bool / --define-number flags before
-		// the install POST so the installer sees the same constant
-		// environment as classic mode (notably WP_DEBUG* defaults set
-		// in run-cli.ts). The classic path applies these via
-		// bootWordPress() before install; here we mirror that ordering.
+		// Apply CLI constants before the install probe so the installer
+		// sees the same WP_DEBUG* defaults as classic mode.
 		const cliConstants = mergeDefinedConstants(this.args);
 		for (const [name, value] of Object.entries(cliConstants)) {
 			api.defineConstant(name, value as string | number | boolean | null);
 		}
 
 		try {
-			// Drive WP's installer programmatically once per fresh doc
-			// root. The classic path does this implicitly via
-			// `@wp-playground/wordpress`'s boot helpers; we bypass those.
-			// Without it every step touching the database (setSiteOptions,
-			// plugin activation, …) silently fails against an
-			// uninstalled WP. Idempotent against a populated SQLite.
 			await ensureWordPressInstalled(api);
 		} catch (e) {
 			await dispose();
 			throw e;
 		}
 
-		// Arm the first-request marker now that install has completed.
-		// router.php watches for the marker and serves a 302 + cookie-
-		// clearing Set-Cookie on the first real request, mirroring the
-		// classic CLI's Express middleware. We arm it post-install so
-		// the install probe sees a clean pipeline.
+		// Arm the marker after install so the install probe sees a clean
+		// pipeline. router.php consumes the marker on the next request.
 		booted.resetFirstRequestMarker();
 
 		return { serverUrl: booted.serverUrl, api, dispose };
@@ -179,9 +163,8 @@ export class PosixKernelHandler {
 			{ progress: tracker, additionalSteps }
 		);
 		if (compiled) {
-			// `runBlueprintV1Steps` types its second arg as `UniversalPHP`,
-			// a union that includes a LimitedPHPApi-shaped object. The
-			// shim implements every method the v1 steps actually call.
+			// runBlueprintV1Steps types its second arg as UniversalPHP; the
+			// shim implements every method v1 steps actually call.
 			await runBlueprintV1Steps(compiled, api as any);
 		}
 	}

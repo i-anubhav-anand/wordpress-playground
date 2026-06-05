@@ -1,9 +1,3 @@
-/**
- * Blueprint v1 steps run against the kernel-resident WordPress.
- * Exercises runPHP (run + stdout capture), writeFile + path
- * translation, mkdir, and login (defineConstant + mu-plugin).
- */
-
 import { describe, expect, it } from 'vitest';
 
 import { runCLI } from '../../src/run-cli';
@@ -32,15 +26,13 @@ describe('--experimental-posix-kernel blueprint v1', () => {
 			},
 		});
 
-		// WP still serves the installer (or front page if a previous
-		// run cached a working install).
 		const response = await fetch(cliServer.serverUrl, {
 			redirect: 'manual',
 		});
 		expect([200, 301, 302]).toContain(response.status);
 
-		// writeFile + mkdir must materialize on disk; nginx serves
-		// wordPressRoot directly so we can read it back over HTTP.
+		// nginx serves wordPressRoot directly, so writeFile + mkdir
+		// side effects are reachable over HTTP.
 		const markerResp = await fetch(
 			new URL(
 				'/wp-content/uploads/slice3-marker/hello.txt',
