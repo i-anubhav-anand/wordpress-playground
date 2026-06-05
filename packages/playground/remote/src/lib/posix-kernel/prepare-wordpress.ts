@@ -132,7 +132,12 @@ export async function prepareWordPressZips(
 			monitor
 		);
 		wpVersion = release.version;
-		wpZipStripLeadingDir = 'wordpress';
+		// downloads.w.org / wordpress.org release archives wrap files in
+		// `wordpress/`. GitHub branch/tag archives (used for `trunk` and
+		// `nightly` → `WordPress/archive/refs/heads/master.zip`) wrap in
+		// `<repo>-<ref>/` (e.g. `WordPress-master/`). Infer from the URL
+		// so `extractZipIntoVfs` strips the right prefix.
+		wpZipStripLeadingDir = inferStripLeadingDirFromUrl(release.releaseUrl);
 	}
 
 	onStatus(`Downloading sqlite-database-integration ${sqliteVersion}`);
@@ -170,6 +175,28 @@ async function fetchZipBytes(
 		);
 	}
 	return new Uint8Array(await response.arrayBuffer());
+}
+
+/**
+ * Returns the top-level directory name embedded in a WordPress archive
+ * URL, used by `extractZipIntoVfs` to strip the wrapper directory so
+ * files land at `/var/www/html/*`.
+ *
+ * - GitHub branch/tag archives wrap entries in `<repo>-<ref>/` (e.g.
+ *   `WordPress-master/` for the trunk URL).
+ * - downloads.w.org / wordpress.org release zips wrap in `wordpress/`.
+ *
+ * Falls back to `'wordpress'` for unknown hosts so user-supplied
+ * mirrors of the canonical release format continue to work.
+ */
+function inferStripLeadingDirFromUrl(url: string): string {
+	const githubArchive = url.match(
+		/^https?:\/\/github\.com\/[^/]+\/([^/]+)\/archive\/refs\/(?:heads|tags)\/([^/?#]+)\.zip/
+	);
+	if (githubArchive) {
+		return `${githubArchive[1]}-${githubArchive[2]}`;
+	}
+	return 'wordpress';
 }
 
 /**

@@ -862,7 +862,15 @@ function pathExists(fs: MemoryFileSystem, path: string): boolean {
  */
 function patchWpSettingsWithDiagCrumbs(fs: MemoryFileSystem): void {
 	const path = '/var/www/html/wp-settings.php';
-	const stat = fs.stat(path);
+	let stat;
+	try {
+		stat = fs.stat(path);
+	} catch {
+		// wp-settings.php may not exist if WordPress extraction failed
+		// or was skipped (e.g. unknown archive layout); the bigger
+		// failure surfaces elsewhere, no point throwing again here.
+		return;
+	}
 	const size = stat.size;
 	const buf = new Uint8Array(size);
 	const fd = fs.open(path, 0, 0); // O_RDONLY
@@ -943,13 +951,16 @@ function patchWpSettingsWithDiagCrumbs(fs: MemoryFileSystem): void {
 			'E-after-wp-plugin-directory-constants',
 		],
 	];
+	// DIAG breadcrumbs are best-effort: WP 6.3–6.7 lack some of the
+	// markers below (html5-named-character-references, doctype-info,
+	// speculative-loading, etc.), and unconditionally throwing here
+	// blew up the boot path on every non-default WP version. Skip
+	// missing markers instead — the crumbs that DO apply still surface
+	// in `diag-mu-trace.log` on supported versions.
 	for (const [marker, tag] of markers) {
 		const idx = text.indexOf(marker);
 		if (idx === -1) {
-			throw new Error(
-				`patchWpSettingsWithDiagCrumbs: marker not found in ` +
-					`wp-settings.php: ${marker}`
-			);
+			continue;
 		}
 		const after = idx + marker.length;
 		text = text.slice(0, after) + crumb(tag) + text.slice(after);
@@ -969,7 +980,14 @@ function patchWpSettingsWithDiagCrumbs(fs: MemoryFileSystem): void {
 function patchDoctypeInfoTrimChains(fs: MemoryFileSystem): void {
 	const path =
 		'/var/www/html/wp-includes/html-api/class-wp-html-doctype-info.php';
-	const stat = fs.stat(path);
+	let stat;
+	try {
+		stat = fs.stat(path);
+	} catch {
+		// HTML API doctype-info doesn't exist in WP < 6.7 — nothing to
+		// trim. DIAG patch is a no-op on older WP versions.
+		return;
+	}
 	const size = stat.size;
 	const buf = new Uint8Array(size);
 	const fd = fs.open(path, 0, 0);
@@ -990,6 +1008,10 @@ function patchDoctypeInfoTrimChains(fs: MemoryFileSystem): void {
 	// $this->indicated_compatibility_mode and return, so the
 	// stripped form behaves like the chain was always false (we just
 	// need PHP to parse and compile the method without crashing).
+	// DIAG patch: best-effort. The regex shapes target the WP 6.8/6.9
+	// minified doctype-info; on 6.7 (the first version that ships this
+	// file) the chain layout may differ. A missing chain just means the
+	// DIAG variant of that branch won't be probed — boot must not fail.
 	const trimChain = (
 		needle: RegExp,
 		mode: 'quirks' | 'limited-quirks'
@@ -999,10 +1021,7 @@ function patchDoctypeInfoTrimChains(fs: MemoryFileSystem): void {
 			`if ( str_starts_with( $public_identifier, 'XXX-PLAYGROUND-DIAG//' ) ) {\n\t\t\t$this->indicated_compatibility_mode = '${mode}';\n\t\t\treturn;\n\t\t}`
 		);
 		if (replaced === text) {
-			throw new Error(
-				`patchDoctypeInfoTrimChains: regex did not match: ` +
-					needle.source.slice(0, 80)
-			);
+			return;
 		}
 		text = replaced;
 	};
@@ -1043,7 +1062,14 @@ function patchDoctypeInfoTrimChains(fs: MemoryFileSystem): void {
  */
 function patchTokenMapExtractClosures(fs: MemoryFileSystem): void {
 	const path = '/var/www/html/wp-includes/class-wp-token-map.php';
-	const stat = fs.stat(path);
+	let stat;
+	try {
+		stat = fs.stat(path);
+	} catch {
+		// `class-wp-token-map.php` was introduced in WP 6.6; older WP
+		// (6.3–6.5) doesn't ship it and doesn't need this workaround.
+		return;
+	}
 	const size = stat.size;
 	const buf = new Uint8Array(size);
 	const fd = fs.open(path, 0, 0);
@@ -1067,9 +1093,19 @@ function patchTokenMapExtractClosures(fs: MemoryFileSystem): void {
 	const closure1Replacement =
 		"array( self::class, '__wpk_sort_group_callback' )";
 	if (!text.includes(closure1Needle)) {
-		throw new Error(
-			'patchTokenMapExtractClosures: closure #1 substring not found'
+		// The minified closure shape varies across WP versions (WP 6.6's
+		// `class-wp-token-map.php` uses an untyped, no-return-type
+		// signature). The patch exists to flatten WP 6.8/6.9's deeply
+		// bracket-nested minified payload below V8's stack budget; on
+		// versions where the file's closure shape differs we skip the
+		// rewrite and rely on the unpatched file being shallow enough
+		// to compile within the stack budget already.
+		console.warn(
+			'patchTokenMapExtractClosures: closure #1 substring not found ' +
+				'— skipping rewrite (likely a WP version with a different ' +
+				'minified shape; file left as-is).'
 		);
+		return;
 	}
 	text = text.replace(closure1Needle, closure1Replacement);
 	// Closure #2: preg_replace_callback inside precomputed_php_source_table.
@@ -1087,9 +1123,15 @@ function patchTokenMapExtractClosures(fs: MemoryFileSystem): void {
 	const closure2Replacement =
 		"array( self::class, '__wpk_escape_for_php_source' )";
 	if (!text.includes(closure2Needle)) {
-		throw new Error(
-			'patchTokenMapExtractClosures: closure #2 substring not found'
+		// Same rationale as closure #1: the shipped closure varies across
+		// WP versions (6.6 uses single-backslash escape forms vs 6.8/6.9's
+		// doubled-backslash form). Skip the rewrite rather than throw.
+		console.warn(
+			'patchTokenMapExtractClosures: closure #2 substring not found ' +
+				'— skipping rewrite (likely a WP version with a different ' +
+				'minified shape; file left as-is).'
 		);
+		return;
 	}
 	text = text.replace(closure2Needle, closure2Replacement);
 	// Inject the two extracted methods right before the class' closing
@@ -1522,8 +1564,18 @@ if ($uri !== '/' && is_file($file)) {
     }
 }
 
-chdir($docRoot);
-include $docRoot . '/index.php';
+$indexPath = $docRoot . '/index.php';
+if (is_file($indexPath)) {
+    chdir($docRoot);
+    include $indexPath;
+    exit;
+}
+// PHP-only mode (no WordPress installed) or an unrecognized path with
+// no docroot index.php. Surface a clean 404 instead of the misleading
+// "include(/var/www/html/index.php): Failed to open stream" warning.
+header('Content-Type: text/plain; charset=utf-8', true, 404);
+echo "Not Found\\n";
+exit;
 `;
 
 const WP_CONFIG_PHP = `<?php
