@@ -340,9 +340,19 @@ jobs:
             - uses: ./.github/actions/prepare-playground
               with:
                   node-version: 24
-            - name: Install wasm-posix-kernel host runtime deps
+            # host/dist/ and binaries/ are gitignored upstream; build and
+            # fetch them so the kernel-mode specs find their artifacts.
+            - name: Build kandelo host
               shell: bash
-              run: npm install --omit=dev --no-package-lock --ignore-scripts --prefix wasm-posix-kernel/host
+              working-directory: kandelo/host
+              run: |
+                  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --no-audit --no-fund
+                  npm run build
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+            - name: Fetch kandelo wasm binaries
+              shell: bash
+              run: bash kandelo/scripts/fetch-binaries.sh --allow-stale
             - name: Install Playwright Browser
               run: sudo npx playwright install ${{ matrix.browser }} --with-deps
             - name: Run Playwright tests (posix-kernel) - ${{ matrix.browser }}${{ matrix.shard && format(' (shard {0})', matrix.shard) || '' }}

@@ -655,11 +655,39 @@ export class KernelPlaygroundWorkerEndpoint {
 			logger.debug(
 				'[posix-kernel] driving WordPress installer if needed'
 			);
-			await ensureWordPressInstalled(
-				this.kernel.sendRequest,
-				this.absoluteUrl
-			);
+			// DIAG: dump service logs to surface why probe gets 502 +
+			// pretty-permalinks api.run returns empty stdout/stderr.
+			// try/finally + timeout so the dump still fires when the
+			// install POST crashes the FPM worker (the POST sendRequest
+			// hangs forever once pid 105/106 forcibly exits because
+			// nginx never gets a response to forward).
+			// Remove once root cause is identified.
+			try {
+				await Promise.race([
+					ensureWordPressInstalled(
+						this.kernel.sendRequest,
+						this.absoluteUrl
+					),
+					new Promise((_, reject) =>
+						setTimeout(
+							() =>
+								reject(
+									new Error(
+										'[diag] ensureWordPressInstalled ' +
+											'timed out after 30s — likely ' +
+											'install POST hung after FPM ' +
+											'worker crash'
+									)
+								),
+							30000
+						)
+					),
+				]);
+			} finally {
+				await dumpServerLogsForDebug(adapter);
+			}
 			await defaultToPrettyPermalinks(api);
+			await dumpServerLogsForDebug(adapter);
 		} else {
 			logger.debug(
 				'[posix-kernel] skipping WordPress install drive ' +
@@ -1067,6 +1095,15 @@ async function ensureWordPressInstalled(
 			`bodyLen=${probe.body?.byteLength ?? 0} ` +
 			`installRequired=${installRequired}`
 	);
+	// DIAG: dump probe body verbatim when install is skipped because the
+	// upstream returned a non-redirect status. The body is whatever WP
+	// (or php-fpm) emitted for `GET /` — usually the rendered fatal.
+	if (!installRequired && probe.body && probe.body.byteLength > 0) {
+		const text = new TextDecoder().decode(probe.body);
+		logger.log(
+			`[diag] install probe body (${probe.body.byteLength} bytes):\n${text}`
+		);
+	}
 	if (!installRequired) {
 		return;
 	}
@@ -1108,6 +1145,58 @@ async function ensureWordPressInstalled(
 			`WordPress installer did not report success: ${html.slice(0, 1000)}`
 		);
 	}
+}
+
+/**
+ * DIAG: dump the kernel-side service logs + a process snapshot so we
+ * can see why nginx returns 502 / why api.run() comes back with empty
+ * stdout/stderr. Best-effort — never throw out of this. Remove once the
+ * php-fpm-side stack overflow is root-caused.
+ */
+async function dumpServerLogsForDebug(
+	adapter: KernelSpawnAdapter
+): Promise<void> {
+	const tryRead = async (path: string, maxBytes?: number): Promise<void> => {
+		try {
+			const text = await adapter.readFileAsText(path);
+			const display =
+				maxBytes !== undefined && text.length > maxBytes
+					? text.slice(0, maxBytes) +
+						`\n…[truncated, ${text.length - maxBytes} bytes more]`
+					: text;
+			const sizeNote =
+				maxBytes !== undefined
+					? `${text.length} bytes, head ${Math.min(
+							maxBytes,
+							text.length
+						)}`
+					: `${text.length} bytes`;
+			logger.log(
+				`[diag] ${path} (${sizeNote}):\n` + (display || '(empty)')
+			);
+		} catch (err) {
+			logger.warn(`[diag] readFileAsText(${path}) threw: ${String(err)}`);
+		}
+	};
+	await tryRead('/var/log/nginx.log');
+	await tryRead('/var/log/php-fpm.log');
+	await tryRead('/var/www/html/wp-content/database/diag-mu-trace.log');
+	// WPK_STACK_DIAG: zend_stack_limit_error() appends (filename,
+	// lineno, stack ptrs, budget) here whenever the compile-time
+	// stack check is about to fatal. Lets us pin the exact construct
+	// in user code that overflows the WPK budget during boot.
+	await tryRead('/var/www/html/wp-content/database/wpk-stack-diag.log');
+	// WP_DEBUG_LOG=true in our wp-config writes any PHP notice/warning
+	// to wp-content/debug.log. If wp-settings.php is aborting early,
+	// it's plausibly via a notice/warning that includes a die().
+	await tryRead('/var/www/html/wp-content/debug.log');
+	// DIAG step 1 (2026-06-03 plan): pull the head of the wp-settings.php
+	// actually shipped in our VFS so we can confirm the call order
+	// between wp_set_lang_dir() (last constant observed defined on the
+	// GET) and wp_plugin_directory_constants() (first constant observed
+	// undefined). 6 KB head covers the function block we care about
+	// without bloating the trace.
+	await tryRead('/var/www/html/wp-settings.php', 24 * 1024);
 }
 
 /**

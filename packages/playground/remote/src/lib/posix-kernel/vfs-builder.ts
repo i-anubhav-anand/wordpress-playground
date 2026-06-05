@@ -52,6 +52,7 @@ import dinitUrl from '@kernel-binary/programs/wasm32/dinit/dinit.wasm?url';
 import dinitctlUrl from '@kernel-binary/programs/wasm32/dinit/dinitctl.wasm?url';
 
 import AUTO_LOGIN_MU_PLUGIN from './wp-templates/auto-login.php?raw';
+import DISABLE_WP_MAIL_MU_PLUGIN from './wp-templates/disable-wp-mail.php?raw';
 
 /**
  * Initial / max sizes for the SharedArrayBuffer that backs the VFS.
@@ -124,6 +125,11 @@ export async function buildVfsImage(
 		writeVfsFile(fs, '/var/www/html/wp-config.php', WP_CONFIG_PHP);
 
 		ensureDirRecursive(fs, '/var/www/html/wp-content/database');
+		// SQLite drop-in's prepare_directory() wp_die()s with
+		// "Unable to create a file in the directory!" if the DB dir is
+		// not writable by the FPM worker (uid 99). Mirrors the CLI's
+		// `ensureDatabaseDir` (prepare-wordpress.ts).
+		fs.chmod('/var/www/html/wp-content/database', 0o777);
 		ensureDirRecursive(fs, '/var/www/html/wp-content/mu-plugins');
 		writeVfsFile(
 			fs,
@@ -143,6 +149,20 @@ export async function buildVfsImage(
 		// ('PLAYGROUND_AUTO_LOGIN_AS_USER', …)`; this mu-plugin is what
 		// turns that constant into an actual WordPress session on the first
 		// HTTP request.
+		// Mirrors the CLI's `ensureDisableWpMailMuPlugin`. wp_install()'s
+		// wp_new_blog_notification() calls wp_mail() → PHPMailer →
+		// popen("sendmail …"); kandelo's fork+exec cannot resolve the
+		// missing sendmail and crashes the FPM worker mid-install (in
+		// the browser worker, the crash surfaces as a wasm-function[42]
+		// recursive stack overflow on `POST /wp-admin/install.php`).
+		// Declaring wp_mail() before pluggable.php makes its
+		// function_exists guard skip the real definition, so the
+		// popen path is never reached.
+		writeVfsFile(
+			fs,
+			'/var/www/html/wp-content/mu-plugins/0-disable-wp-mail.php',
+			DISABLE_WP_MAIL_MU_PLUGIN
+		);
 		writeVfsFile(
 			fs,
 			'/var/www/html/wp-content/mu-plugins/1-playground-auto-login.php',
@@ -157,6 +177,35 @@ export async function buildVfsImage(
 			// would clobber the kernel-tailored config written above).
 			exclude: (rel) => rel.endsWith('.db') || rel === 'wp-config.php',
 		});
+
+		// DIAG probe B (2026-06-04): patch the just-extracted
+		// wp-settings.php to drop `[diag-wpset-*]` breadcrumbs after
+		// each major call between `require_wp_db()` and the
+		// `wp_get_mu_plugins()` foreach. Tells us exactly which call
+		// triggers the wasm-function[42] recursion on the install
+		// POST. Revert with this whole block before shipping.
+		patchWpSettingsWithDiagCrumbs(fs);
+
+		// DIAG probe C2 (2026-06-04): re-implant the original
+		// class-wp-html-doctype-info.php, but with the three long
+		// `||` `str_starts_with()` chains collapsed to a single check
+		// each. If install advances past D-3-ab3, the boolean chain
+		// AST depth is the trigger (general PHP-WASM/kandelo
+		// recursion issue, not specific to this file).
+		patchDoctypeInfoTrimChains(fs);
+
+		// PR #3635 Outcome (i) (2026-06-04): wp-includes/class-wp-token-map.php
+		// ships minified to one line, so its compile recurses deeply enough
+		// to blow our ~8 KiB WPK budget (PHP fires "Maximum call stack size"
+		// at compile time on the WPK_STACK_DUMMY_128-instrumented php-fpm.wasm).
+		// Bracket-depth peaks at ~11 inside two anonymous closures (usort
+		// callback in `from_array`, preg_replace_callback callback in
+		// `precomputed_php_source_table`). Extracting both to named static
+		// methods drops them out of the surrounding expression's compile
+		// stack — 2-4 fewer dummy frames per callsite, enough headroom
+		// for token-map to compile gracefully without raising the budget
+		// past V8's WASM-frame limit.
+		patchTokenMapExtractClosures(fs);
 
 		if (options.wpStaticZipBytes) {
 			onStatus('Extracting WordPress static assets into VFS');
@@ -190,11 +239,85 @@ export async function buildVfsImage(
 			}
 		);
 		if (dbCopyBytes) {
+			// DIAG step 2 option A (2026-06-03 plan): shim db.php so we
+			// can tell whether `require_wp_db()` actually reaches the
+			// SQLite drop-in before the wasm-function[42] recursion
+			// fires on the install POST. The real drop-in is written
+			// to a sibling path and required from a tiny PHP wrapper
+			// that first appends a [diag-dbphp] line (REQUEST_METHOD +
+			// REQUEST_URI) to the same diag-mu-trace.log the rest of
+			// the install-flow probes write to. If [diag-dbphp] fires
+			// on the POST, the recursion is downstream of drop-in
+			// load (suspect wp_set_wpdb_vars / first CREATE TABLE);
+			// if it doesn't, it's at or before require_wp_db().
 			writeVfsBinary(
 				fs,
-				'/var/www/html/wp-content/db.php',
+				'/var/www/html/wp-content/db.original.php',
 				dbCopyBytes,
 				0o644
+			);
+			writeVfsFile(
+				fs,
+				'/var/www/html/wp-content/db.php',
+				`<?php
+$diagLog = '/var/www/html/wp-content/database/diag-mu-trace.log';
+@file_put_contents(
+    $diagLog,
+    '[diag-dbphp] db.php top; REQUEST_METHOD=' . ($_SERVER['REQUEST_METHOD'] ?? '?') . ' REQUEST_URI=' . ($_SERVER['REQUEST_URI'] ?? '?') . "\\n",
+    FILE_APPEND
+);
+require_once __DIR__ . '/db.original.php';
+@file_put_contents(
+    $diagLog,
+    '[diag-dbphp-end] db.php after require_once; REQUEST_METHOD=' . ($_SERVER['REQUEST_METHOD'] ?? '?') . ' REQUEST_URI=' . ($_SERVER['REQUEST_URI'] ?? '?') . "\\n",
+    FILE_APPEND
+);
+global $wpdb;
+@file_put_contents(
+    $diagLog,
+    '[diag-dbphp-wpdb] $wpdb isset=' . var_export(isset($wpdb), true)
+        . ' class=' . (isset($wpdb) ? get_class($wpdb) : '?')
+        . ' error=' . (isset($wpdb) ? var_export($wpdb->error, true) : '(no wpdb)')
+        . "\\n",
+    FILE_APPEND
+);
+if (isset($wpdb)) {
+    @file_put_contents(
+        $diagLog,
+        '[diag-dbphp-probe1] before $wpdb->get_var(SELECT 1)' . "\\n",
+        FILE_APPEND
+    );
+    $diagProbe = @$wpdb->get_var('SELECT 1');
+    @file_put_contents(
+        $diagLog,
+        '[diag-dbphp-probe2] after $wpdb->get_var(SELECT 1): result='
+            . var_export($diagProbe, true)
+            . ' last_error=' . var_export($wpdb->last_error ?? null, true)
+            . "\\n",
+        FILE_APPEND
+    );
+    // Probe A (2026-06-04): SHOW TABLES is the next real query WP runs on
+    // POST via is_blog_installed() → $wpdb->get_col("SHOW TABLES LIKE
+    // 'wp_users'"). The SQLite drop-in has to rewrite MySQL SHOW TABLES
+    // into a sqlite_master select; if the rewriter is the wasm-function[42]
+    // recursion trigger, this probe will kill the worker right here and
+    // [diag-dbphp-probe4] won't appear on POST.
+    @file_put_contents(
+        $diagLog,
+        '[diag-dbphp-probe3] before $wpdb->get_col(SHOW TABLES LIKE wp_users)' . "\\n",
+        FILE_APPEND
+    );
+    $diagShowTables = @$wpdb->get_col("SHOW TABLES LIKE 'wp_users'");
+    @file_put_contents(
+        $diagLog,
+        '[diag-dbphp-probe4] after $wpdb->get_col(SHOW TABLES LIKE wp_users): result='
+            . var_export($diagShowTables, true)
+            . ' last_error=' . var_export($wpdb->last_error ?? null, true)
+            . "\\n",
+        FILE_APPEND
+    );
+}
+`
 			);
 		}
 	}
@@ -302,6 +425,60 @@ function populatePreloadFiles(fs: MemoryFileSystem): void {
 		fs,
 		'/internal/shared/auto_prepend_file.php',
 		`<?php
+// DIAG: breadcrumb at the very first user-PHP that runs in any
+// FPM request. If this never lands in diag-mu-trace.log we know the
+// crash is *before* any user PHP — i.e. inside FPM/SAPI init itself.
+$diagLog = '/var/www/html/wp-content/database/diag-mu-trace.log';
+@file_put_contents(
+    $diagLog,
+    '[diag-ap] auto_prepend_file ran; REQUEST_METHOD=' . ($_SERVER['REQUEST_METHOD'] ?? '?') . ' REQUEST_URI=' . ($_SERVER['REQUEST_URI'] ?? '?') . "\\n",
+    FILE_APPEND
+);
+// DIAG: probe what the FPM worker (uid 99) actually sees at the
+// mu-plugins dir. If is_dir/opendir/scandir return surprising
+// values, wp_get_mu_plugins() will silently return [] and skip
+// every mu-plugin file.
+$muDir = '/var/www/html/wp-content/mu-plugins';
+@file_put_contents(
+    $diagLog,
+    '[diag-ap-mudir] dir=' . $muDir
+        . ' is_dir=' . var_export(is_dir($muDir), true)
+        . ' is_readable=' . var_export(is_readable($muDir), true)
+        . ' scandir=' . var_export(@scandir($muDir), true)
+        . "\\n",
+    FILE_APPEND
+);
+// DIAG: capture script-end state to learn whether wp-settings.php
+// actually reaches wp_get_mu_plugins(). If WPMU_PLUGIN_DIR is not
+// defined at shutdown, wp-settings aborted before
+// wp_initial_constants(). If it IS defined but our breadcrumbs
+// don't appear, the include_once loop is being skipped or our
+// includes silently fail.
+register_shutdown_function(function () use ($diagLog) {
+    $err = error_get_last();
+    // Probe constants in the order wp-settings.php defines them, so
+    // the last-defined one tells us how far execution got.
+    $constants = [
+        'WPINC' => defined('WPINC'),                  // wp-settings top
+        'WP_CONTENT_DIR' => defined('WP_CONTENT_DIR'), // wp_initial_constants
+        'WP_DEBUG_DISPLAY' => defined('WP_DEBUG_DISPLAY'), // initial
+        'WP_LANG_DIR' => defined('WP_LANG_DIR'),      // wp_set_lang_dir
+        'WP_PLUGIN_DIR' => defined('WP_PLUGIN_DIR'),  // wp_plugin_directory_constants
+        'WPMU_PLUGIN_DIR' => defined('WPMU_PLUGIN_DIR'), // same call
+        'COOKIEHASH' => defined('COOKIEHASH'),         // wp_cookie_constants
+        'AUTH_COOKIE' => defined('AUTH_COOKIE'),       // wp_cookie_constants
+    ];
+    @file_put_contents(
+        $diagLog,
+        '[diag-shutdown] uri=' . ($_SERVER['REQUEST_URI'] ?? '?')
+            . ' constants=' . json_encode($constants)
+            . ' headers=' . json_encode(headers_list())
+            . ' http_response_code=' . http_response_code()
+            . ' last_err=' . var_export($err, true)
+            . "\\n",
+        FILE_APPEND
+    );
+});
 foreach (glob('/internal/shared/preload/*.php') as $file) {
     require_once $file;
 }
@@ -427,6 +604,28 @@ function populatePhpFpmConfig(
 		: PHP_FPM_CONF + PHP_FPM_NETWORKING_DISABLED_OVERRIDES;
 	writeVfsFile(fs, '/etc/php-fpm.conf', conf);
 	writeVfsFile(fs, '/var/www/fpm-router.php', FPM_ROUTER_PHP);
+	// Constrain PHP's recursive-compile budget. PHP's auto-detect
+	// pthread stack returns the WASM linear-memory stack (4 MB), which
+	// far overshoots V8's actual host stack (~50 wasm frames per Worker
+	// isolate). Without this cap PHP recurses through zend_compile_expr
+	// past the V8 budget and the whole kernel-worker dies with an
+	// untrappable RangeError.
+	//
+	// Active budget = max_allowed_stack_size - reserved_stack_size.
+	// Zend/zend.c::OnUpdateReservedStackSize enforces a floor of
+	// `ZEND_ALLOCA_MAX_SIZE + 16 KiB = 32 + 16 = 48 KiB = 49152` bytes
+	// on `reserved_stack_size` (an INI value of 0 silently bumps to
+	// 49152). So max_allowed_stack_size MUST be larger than 49152 to
+	// produce a positive active budget — setting it to 12 800 wraps the
+	// subtraction at uint64 and PHP fatals on every check.
+	//
+	// max=57344 → active budget = 57344 - 49152 = 8 192 bytes = 32
+	// patched frames at 256 bytes/frame (WPK_STACK_DUMMY_256 in
+	// build-php.sh patches Zend recursive helpers to force per-frame
+	// __stack_pointer decrement so PHP's SP-based check is actually
+	// accurate on WASM). 32 frames is comfortably under V8 worker
+	// isolate's ~50-frame limit.
+	writeVfsFile(fs, '/etc/php.ini', 'zend.max_allowed_stack_size=131072\n');
 }
 
 // --- dinit init system -----------------------------------------------
@@ -449,11 +648,24 @@ function buildServices(): DinitService[] {
 		{
 			name: 'php-fpm',
 			type: 'process',
-			// -c /dev/null suppresses default php.ini lookup (which lands
-			// on /usr/local/lib/php/php.ini-development by default and
-			// trips unsupported-config errors on the wasm port).
+			// -d zend.max_allowed_stack_size=131072 caps PHP's stack so
+			// recursive compile / VM paths raise a graceful fatal
+			// before V8 RangeErrors at ~50 wasm-internal frames.
+			//
+			// Active budget = max - reserved_stack_size. Zend enforces
+			// a 49 152-byte floor on reserved_stack_size, so max must
+			// be > 49 152 to produce a positive budget. 57 344 = 49 152
+			// + 8 192 → 8 KiB budget = 32 patched-function frames at
+			// 256 bytes/frame (see WPK_STACK_DUMMY_256 in build-php.sh
+			// — without those dummies WASM __stack_pointer wouldn't
+			// move per recursive call and the check would never fire).
+			//
+			// Also requires ZEND_CHECK_STACK_LIMIT #define'd in
+			// php_config.h (see build-php.sh — the macro is left
+			// undefined by upstream cross-compile because the
+			// AC_RUN_IFELSE probe can't run in cross-compile mode).
 			command:
-				'/usr/sbin/php-fpm -y /etc/php-fpm.conf -c /dev/null --nodaemonize',
+				'/usr/sbin/php-fpm -y /etc/php-fpm.conf -c /dev/null -d zend.max_allowed_stack_size=131072 --nodaemonize',
 			logfile: '/var/log/php-fpm.log',
 			restart: false,
 		},
@@ -637,6 +849,276 @@ function pathExists(fs: MemoryFileSystem, path: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * DIAG (2026-06-04): read wp-settings.php out of the just-extracted
+ * VFS, append a `[diag-wpset-<tag>]` breadcrumb after each major call
+ * between `require_wp_db()` and the `wp_get_mu_plugins()` foreach, and
+ * write the patched file back. The last breadcrumb that appears in
+ * `diag-mu-trace.log` on the install POST is the call right before the
+ * wasm-function[42] recursion. Revert the call site + this function
+ * together before shipping.
+ */
+function patchWpSettingsWithDiagCrumbs(fs: MemoryFileSystem): void {
+	const path = '/var/www/html/wp-settings.php';
+	const stat = fs.stat(path);
+	const size = stat.size;
+	const buf = new Uint8Array(size);
+	const fd = fs.open(path, 0, 0); // O_RDONLY
+	try {
+		let off = 0;
+		while (off < size) {
+			const n = fs.read(fd, buf.subarray(off), null, size - off);
+			if (n <= 0) break;
+			off += n;
+		}
+	} finally {
+		fs.close(fd);
+	}
+	let text = new TextDecoder().decode(buf);
+	const log = "'/var/www/html/wp-content/database/diag-mu-trace.log'";
+	const crumb = (tag: string): string =>
+		` @file_put_contents(${log}, '[diag-wpset-${tag}] ' . ` +
+		`($_SERVER['REQUEST_METHOD'] ?? '?') . "\\n", FILE_APPEND);`;
+	const markers: Array<[string, string]> = [
+		['require_wp_db();', 'A-after-require-wp-db'],
+		['wp_set_wpdb_vars();', 'B-after-wp-set-wpdb-vars'],
+		['wp_start_object_cache();', 'C-after-wp-start-object-cache'],
+		['wp_not_installed();', 'D-after-wp-not-installed'],
+		[
+			"require ABSPATH . WPINC . '/comment-template.php';",
+			'D-2-after-comment-template',
+		],
+		["require ABSPATH . WPINC . '/media.php';", 'D-3-after-media'],
+		["require ABSPATH . WPINC . '/http.php';", 'D-3-aa-after-http'],
+		[
+			"require ABSPATH . WPINC . '/html-api/html5-named-character-references.php';",
+			'D-3-ab-after-html5-named-char-refs',
+		],
+		[
+			"require ABSPATH . WPINC . '/html-api/class-wp-html-attribute-token.php';",
+			'D-3-ab1-after-attribute-token',
+		],
+		[
+			"require ABSPATH . WPINC . '/html-api/class-wp-html-span.php';",
+			'D-3-ab2-after-span',
+		],
+		[
+			"require ABSPATH . WPINC . '/html-api/class-wp-html-doctype-info.php';",
+			'D-3-ab3-after-doctype-info',
+		],
+		[
+			"require ABSPATH . WPINC . '/html-api/class-wp-html-text-replacement.php';",
+			'D-3-ab4-after-text-replacement',
+		],
+		[
+			"require ABSPATH . WPINC . '/html-api/class-wp-html-decoder.php';",
+			'D-3-ab5-after-decoder',
+		],
+		[
+			"require ABSPATH . WPINC . '/html-api/class-wp-html-tag-processor.php';",
+			'D-3-ac-after-tag-processor',
+		],
+		[
+			"require ABSPATH . WPINC . '/html-api/class-wp-html-processor.php';",
+			'D-3a-after-html-api',
+		],
+		["require ABSPATH . WPINC . '/admin-bar.php';", 'D-3b-after-admin-bar'],
+		[
+			"require ABSPATH . WPINC . '/rest-api/endpoints/class-wp-rest-comments-controller.php';",
+			'D-3c-after-rest-comments-controller',
+		],
+		["require ABSPATH . WPINC . '/sitemaps.php';", 'D-4-after-sitemaps'],
+		[
+			"require ABSPATH . WPINC . '/speculative-loading.php';",
+			'F-after-speculative-loading',
+		],
+		[
+			"$GLOBALS['wp_textdomain_registry']->init();",
+			'G-after-textdomain-registry-init',
+		],
+		[
+			'wp_plugin_directory_constants();',
+			'E-after-wp-plugin-directory-constants',
+		],
+	];
+	for (const [marker, tag] of markers) {
+		const idx = text.indexOf(marker);
+		if (idx === -1) {
+			throw new Error(
+				`patchWpSettingsWithDiagCrumbs: marker not found in ` +
+					`wp-settings.php: ${marker}`
+			);
+		}
+		const after = idx + marker.length;
+		text = text.slice(0, after) + crumb(tag) + text.slice(after);
+	}
+	writeVfsFile(fs, path, text);
+}
+
+/**
+ * DIAG probe C2 (2026-06-04): reads the post-extraction
+ * class-wp-html-doctype-info.php and trims the three long
+ * `|| str_starts_with(...)` chains down to one condition each.
+ * Everything else (class signature, `?self` return type, `goto`
+ * labels, property defaults) is left intact. If install now
+ * advances past the D-3-ab3 marker, the deep `||` AST is the
+ * trigger.
+ */
+function patchDoctypeInfoTrimChains(fs: MemoryFileSystem): void {
+	const path =
+		'/var/www/html/wp-includes/html-api/class-wp-html-doctype-info.php';
+	const stat = fs.stat(path);
+	const size = stat.size;
+	const buf = new Uint8Array(size);
+	const fd = fs.open(path, 0, 0);
+	try {
+		let off = 0;
+		while (off < size) {
+			const n = fs.read(fd, buf.subarray(off), null, size - off);
+			if (n <= 0) break;
+			off += n;
+		}
+	} finally {
+		fs.close(fd);
+	}
+	let text = new TextDecoder().decode(buf);
+	// Regex-replace each `if ( <long || chain> )` block (across
+	// multiple lines, no `}` between) with a trivial single-condition
+	// `if`. The chain bodies always set
+	// $this->indicated_compatibility_mode and return, so the
+	// stripped form behaves like the chain was always false (we just
+	// need PHP to parse and compile the method without crashing).
+	const trimChain = (
+		needle: RegExp,
+		mode: 'quirks' | 'limited-quirks'
+	): void => {
+		const replaced = text.replace(
+			needle,
+			`if ( str_starts_with( $public_identifier, 'XXX-PLAYGROUND-DIAG//' ) ) {\n\t\t\t$this->indicated_compatibility_mode = '${mode}';\n\t\t\treturn;\n\t\t}`
+		);
+		if (replaced === text) {
+			throw new Error(
+				`patchDoctypeInfoTrimChains: regex did not match: ` +
+					needle.source.slice(0, 80)
+			);
+		}
+		text = replaced;
+	};
+	// Chain 1: solo `|| str_starts_with(...)` × ~50. Match the whole
+	// if(...) { ...; return; } block.
+	trimChain(
+		/if \(\s+str_starts_with\( \$public_identifier, '\+\/\/silmaril[\s\S]*?return;\s*\}/,
+		'quirks'
+	);
+	// Chain 2: `$system_identifier_is_missing && ( X || Y )` (quirks).
+	trimChain(
+		/if \(\s+\$system_identifier_is_missing && \(\s+str_starts_with[\s\S]*?return;\s*\}/,
+		'quirks'
+	);
+	// Chain 3a: solo xhtml `|| str_starts_with(...)` × 2 (limited-quirks).
+	trimChain(
+		/if \(\s+str_starts_with\( \$public_identifier, '-\/\/w3c\/\/dtd xhtml[\s\S]*?return;\s*\}/,
+		'limited-quirks'
+	);
+	// Chain 3b: `! $system_identifier_is_missing && ( X || Y )` (limited-quirks).
+	trimChain(
+		/if \(\s+! \$system_identifier_is_missing && \(\s+str_starts_with[\s\S]*?return;\s*\}/,
+		'limited-quirks'
+	);
+	writeVfsFile(fs, path, text);
+}
+
+/**
+ * PR #3635 Outcome (i): rewrites the extracted minified
+ * class-wp-token-map.php to extract its two anonymous closures into
+ * named static methods. Functionally equivalent (both new methods just
+ * inline the original closure body), but flattens the AST enough that
+ * compile-time recursion stays under the WPK_STACK_DUMMY_128 budget at
+ * `zend.max_allowed_stack_size = 131072`. Replacements run as byte-exact
+ * substring swaps against the minified payload; throws if either
+ * substring is missing (so the WP build can't drift past this patch
+ * without us noticing).
+ */
+function patchTokenMapExtractClosures(fs: MemoryFileSystem): void {
+	const path = '/var/www/html/wp-includes/class-wp-token-map.php';
+	const stat = fs.stat(path);
+	const size = stat.size;
+	const buf = new Uint8Array(size);
+	const fd = fs.open(path, 0, 0);
+	try {
+		let off = 0;
+		while (off < size) {
+			const n = fs.read(fd, buf.subarray(off), null, size - off);
+			if (n <= 0) break;
+			off += n;
+		}
+	} finally {
+		fs.close(fd);
+	}
+	let text = new TextDecoder().decode(buf);
+	// Closure #1: usort callback inside from_array. Replace the inline
+	// closure with a callable referencing a new private static method,
+	// added at the end of the class body below.
+	const closure1Needle =
+		'static function ( array $a, array $b ): int ' +
+		'{ return self::longest_first_then_alphabetical( $a[0], $b[0] ); }';
+	const closure1Replacement =
+		"array( self::class, '__wpk_sort_group_callback' )";
+	if (!text.includes(closure1Needle)) {
+		throw new Error(
+			'patchTokenMapExtractClosures: closure #1 substring not found'
+		);
+	}
+	text = text.replace(closure1Needle, closure1Replacement);
+	// Closure #2: preg_replace_callback inside precomputed_php_source_table.
+	// The shipped wp-6.9 minified file uses doubled-backslash escapes
+	// (`'\\"'` and `"\\x{$hex}"`) — semantically equivalent to the
+	// single-backslash form but a byte-for-byte difference, so the needle
+	// must match the shipped bytes exactly.
+	const closure2Needle =
+		'static function ( $match_result ) ' +
+		'{ switch ( $match_result[0] ) ' +
+		"{ case '\"': return '\\\\\"'; " +
+		"case '\\\\': return '\\\\\\\\'; " +
+		'default: $hex = dechex( ord( $match_result[0] ) ); ' +
+		'return "\\\\x{$hex}"; } }';
+	const closure2Replacement =
+		"array( self::class, '__wpk_escape_for_php_source' )";
+	if (!text.includes(closure2Needle)) {
+		throw new Error(
+			'patchTokenMapExtractClosures: closure #2 substring not found'
+		);
+	}
+	text = text.replace(closure2Needle, closure2Replacement);
+	// Inject the two extracted methods right before the class' closing
+	// `}`. The minified file ends with `} }` (close of last method, then
+	// close of class) followed by a trailing newline. Insert before the
+	// final class-close brace. The escape-for-php-source body is byte-
+	// identical to the original closure (doubled backslashes in both the
+	// `'\\"'` and `"\\x{$hex}"` returns).
+	const injectedMethods =
+		' public static function __wpk_sort_group_callback( array $a, array $b ): int ' +
+		'{ return self::longest_first_then_alphabetical( $a[0], $b[0] ); }' +
+		' public static function __wpk_escape_for_php_source( $match_result ): string ' +
+		'{ switch ( $match_result[0] ) ' +
+		"{ case '\"': return '\\\\\"'; " +
+		"case '\\\\': return '\\\\\\\\'; " +
+		'default: $hex = dechex( ord( $match_result[0] ) ); ' +
+		'return "\\\\x{$hex}"; } }';
+	const lastCloseBrace = text.lastIndexOf('}');
+	if (lastCloseBrace < 0) {
+		throw new Error(
+			'patchTokenMapExtractClosures: trailing class-close `}` not found'
+		);
+	}
+	text =
+		text.slice(0, lastCloseBrace) +
+		injectedMethods +
+		' ' +
+		text.slice(lastCloseBrace);
+	writeVfsFile(fs, path, text);
 }
 
 function stripLeadingDirPrefix(path: string, dirName: string): string | null {
@@ -1113,6 +1595,14 @@ require_once ABSPATH . 'wp-settings.php';
 `;
 
 const WASM_OPTIMIZATIONS_MU_PLUGIN = `<?php
+// DIAG: triangulate — if this breadcrumb fires but [diag-mu] from
+// 0-disable-wp-mail.php does not, our file is the problem. If
+// neither fires, mu-plugins are not being enumerated at all.
+@file_put_contents(
+    '/var/www/html/wp-content/database/diag-mu-trace.log',
+    '[diag-wo] wasm-optimizations.php loaded; REQUEST_METHOD=' . ($_SERVER['REQUEST_METHOD'] ?? '?') . ' REQUEST_URI=' . ($_SERVER['REQUEST_URI'] ?? '?') . "\\n",
+    FILE_APPEND
+);
 add_filter('pre_wp_mail', '__return_false');
 add_filter('pre_http_request', function($pre, $args, $url) {
     return new WP_Error('http_disabled', 'HTTP requests disabled in Wasm');

@@ -63,11 +63,18 @@ function resolveKernelDir(): string {
  *   1. `<kernelDir>/local-binaries/<rel>` — local `bash build.sh` output.
  *   2. `<kernelDir>/binaries/<rel>` — release-mirrored artifacts.
  *
- * `@rootfs-vfs` resolves to `<kernelDir>/host/wasm/rootfs.vfs` (built by
- * `scripts/build-rootfs.sh` during `bash build.sh`). The kernel-mode
- * `BrowserKernel` imports it unconditionally to overlay `/etc/*` onto
- * the SAB-backed VFS, so a missing file would otherwise surface as a
- * cryptic worker-load failure — we throw with the build hint instead.
+ * `@rootfs-vfs` resolves to `<root>/programs/wasm32/rootfs.vfs` under
+ * the same `tryRoots` lookup — `local-binaries/` first, `binaries/`
+ * second — with a final fall-through to the legacy
+ * `<kernelDir>/host/wasm/rootfs.vfs` path that `bash build.sh` still
+ * emits today (the registry move into `packages/registry/rootfs/` did
+ * not change `build.sh`'s output path). Produced by the `rootfs`
+ * registry package and dropped into `binaries/programs/wasm32/` by
+ * `scripts/fetch-binaries.sh`, or directly into `host/wasm/` by
+ * `build.sh`. The kernel-mode `BrowserKernel` imports it
+ * unconditionally to overlay `/etc/*` onto the SAB-backed VFS, so a
+ * missing file would otherwise surface as a cryptic worker-load
+ * failure — we throw with the build / fetch hint instead.
  */
 function resolveKernelBinariesPlugin(): Plugin {
 	const kernelDir = resolveKernelDir();
@@ -102,14 +109,22 @@ function resolveKernelBinariesPlugin(): Plugin {
 			if (pathPart === KERNEL_WASM_ALIAS) {
 				resolved = findUnder('kernel.wasm');
 			} else if (pathPart === ROOTFS_VFS_ALIAS) {
-				const candidate = join(kernelDir, 'host/wasm/rootfs.vfs');
-				if (existsSync(candidate)) {
-					resolved = candidate;
-				} else {
+				resolved = findUnder('programs/wasm32/rootfs.vfs');
+				if (!resolved) {
+					const legacy = join(kernelDir, 'host/wasm/rootfs.vfs');
+					if (existsSync(legacy)) {
+						resolved = legacy;
+					}
+				}
+				if (!resolved) {
 					this.error(
-						`rootfs.vfs not found at ${candidate}. ` +
-							'Run `bash build.sh` from the kandelo ' +
-							'checkout to produce it.'
+						'rootfs.vfs not found under ' +
+							`${kernelDir}/{local-binaries,binaries}/programs/wasm32/ ` +
+							`or ${kernelDir}/host/wasm/. ` +
+							'Run `bash scripts/dev-shell.sh bash build.sh` ' +
+							'from the kandelo checkout to produce ' +
+							'it, or `bash scripts/fetch-binaries.sh ' +
+							'--allow-stale` once v12 is republished.'
 					);
 				}
 			} else if (pathPart.startsWith(BINARIES_PREFIX)) {
