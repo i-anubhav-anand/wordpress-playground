@@ -2,7 +2,7 @@
  * Build a fully-bootable VFS image for the browser `--experimental-posix-
  * kernel` mode.
  *
- * Browser port of `wasm-posix-kernel/examples/browser/scripts/build-wp-
+ * Browser port of `kandelo/examples/browser/scripts/build-wp-
  * vfs-image.ts`. The Node script reads binaries from disk with
  * `readFileSync` and walks a pre-extracted WordPress checkout with
  * `walkAndWrite`. In the browser we:
@@ -35,11 +35,11 @@ import {
 	ensureDir,
 	ensureDirRecursive,
 	symlink,
-} from '@wasm-posix-kernel/host/src/vfs/image-helpers';
+} from '@kandelo/host/src/vfs/image-helpers';
 
 // `?url` imports resolved by `resolveKernelBinariesPlugin` in
 // `vite.posix-kernel.config.ts`. The plugin walks
-// `<wasm-posix-kernel>/local-binaries/<rel>` first, then `binaries/<rel>`.
+// `<kandelo>/local-binaries/<rel>` first, then `binaries/<rel>`.
 // Binaries must be present at one of those paths for `npm run
 // dev:experimental-posix-kernel` to start.
 import nginxUrl from '@kernel-binary/programs/wasm32/nginx.wasm?url';
@@ -274,7 +274,7 @@ async function populateServerBinaries(fs: MemoryFileSystem): Promise<void> {
  * having to spell out an absolute path.
  *
  * `php` lands at `/usr/local/bin/php` (matches the upstream demo's
- * convention in `wasm-posix-kernel/examples/browser/pages/php/main.ts`);
+ * convention in `kandelo/examples/browser/pages/php/main.ts`);
  * `less` lands at `/usr/bin/less` (upstream's `shell-vfs-build.ts`
  * convention). The php.wasm bytes are also fetched a second time by
  * `playground-worker-endpoint.ts` for the host-side
@@ -657,7 +657,7 @@ function stripLeadingDirPrefix(path: string, dirName: string): string | null {
  * GNU coreutils multicall command names (91 entries). Each becomes a
  * symlink under /bin and /usr/bin pointing at `/bin/coreutils`. Kept
  * inline rather than importing from
- * `wasm-posix-kernel/examples/browser/lib/init/shell-binaries` so the
+ * `kandelo/examples/browser/lib/init/shell-binaries` so the
  * dependency graph stays narrow (that module also pulls in BrowserKernel
  * type-level — fine here, but inlining keeps the worker entry hermetic).
  */
@@ -1055,14 +1055,14 @@ define('DB_COLLATE', '');
 define('DB_DIR', __DIR__ . '/wp-content/database/');
 define('DB_FILE', 'wordpress.db');
 
-define('AUTH_KEY',         'wasm-posix-kernel-dev');
-define('SECURE_AUTH_KEY',  'wasm-posix-kernel-dev');
-define('LOGGED_IN_KEY',    'wasm-posix-kernel-dev');
-define('NONCE_KEY',        'wasm-posix-kernel-dev');
-define('AUTH_SALT',        'wasm-posix-kernel-dev');
-define('SECURE_AUTH_SALT', 'wasm-posix-kernel-dev');
-define('LOGGED_IN_SALT',   'wasm-posix-kernel-dev');
-define('NONCE_SALT',       'wasm-posix-kernel-dev');
+define('AUTH_KEY',         'kandelo-dev');
+define('SECURE_AUTH_KEY',  'kandelo-dev');
+define('LOGGED_IN_KEY',    'kandelo-dev');
+define('NONCE_KEY',        'kandelo-dev');
+define('AUTH_SALT',        'kandelo-dev');
+define('SECURE_AUTH_SALT', 'kandelo-dev');
+define('LOGGED_IN_SALT',   'kandelo-dev');
+define('NONCE_SALT',       'kandelo-dev');
 
 $table_prefix = 'wp_';
 

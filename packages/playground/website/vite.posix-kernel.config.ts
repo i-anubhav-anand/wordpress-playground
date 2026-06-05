@@ -60,7 +60,7 @@ export default defineConfig(async (env: ConfigEnv): Promise<UserConfig> => {
 				 * Override the base `/cors-proxy` rule to also accept the
 				 * kernel worker's hardcoded dev shape
 				 * (`/cors-proxy?url=<encoded>`, baked into
-				 * `wasm-posix-kernel/examples/browser/lib/
+				 * `kandelo/examples/browser/lib/
 				 * kernel-worker-entry.ts:299`). Without this, every
 				 * outbound HTTPS request from kernel-resident PHP
 				 * (file_get_contents, etc.) returns 404 from

@@ -1,5 +1,5 @@
 /**
- * Boot WordPress backed by wasm-posix-kernel in the browser.
+ * Boot WordPress backed by kandelo in the browser.
  *
  * Browser counterpart to `playground/cli/src/posix-kernel/boot.ts`.
  * Where the CLI spawns a Node worker thread that owns the kernel and
@@ -154,12 +154,12 @@ export async function bootKernelWordPress(
 	// not when dinit's child services (php-fpm, nginx) have bound their
 	// sockets. Until nginx is listening on :8080 the bridge rejects
 	// every request with "No listener target available" (emitted from
-	// `wasm-posix-kernel/host/src/kernel-worker-entry.ts:1018`). Poll
+	// `kandelo/host/src/kernel-worker-entry.ts:1018`). Poll
 	// `GET /` through the bridge until any HTTP status comes back.
 	await waitForNginx(sendRequest, NGINX_READY_TIMEOUT_MS);
 
 	// `BrowserKernel.nextPid` is initialized to 100
-	// (`wasm-posix-kernel/examples/browser/lib/browser-kernel.ts:104`),
+	// (`kandelo/examples/browser/lib/browser-kernel.ts:104`),
 	// but the kernel's internal process table is already populated past
 	// that mark: dinit (PID 1), php-fpm, nginx, plus every php-fpm
 	// worker forked under the load php-fpm hits while serving the
@@ -259,7 +259,7 @@ function createRequestSender(bridge: HttpBridgeHost) {
 		// nginx's vhost (`vfs-builder.ts:697` — `server_name localhost`)
 		// is HTTP/1.1 and rejects any request without a `Host:` header
 		// with a 400 (RFC 7230 §5.4). The bridge's
-		// `buildRawHttpRequest` (`wasm-posix-kernel/examples/browser/
+		// `buildRawHttpRequest` (`kandelo/examples/browser/
 		// lib/kernel-worker-entry.ts:1129`) does not synthesize a Host
 		// of its own — it writes exactly the headers we hand it. The
 		// CLI doesn't trip this because it calls Node's `fetch()`,

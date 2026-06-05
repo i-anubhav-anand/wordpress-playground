@@ -11,9 +11,9 @@
  *
  * Key differences from `vite.config.ts`:
  *   1. A `resolveKernelBinariesPlugin` resolves `@kernel-wasm` and
- *      `@kernel-binary/<rel>?url` imports against a wasm-posix-kernel
- *      checkout (defaults to the bundled `wasm-posix-kernel/` submodule;
- *      override with `WASM_POSIX_KERNEL_DIR` to point elsewhere).
+ *      `@kernel-binary/<rel>?url` imports against a kandelo
+ *      checkout (defaults to the bundled `kandelo/` submodule;
+ *      override with `KANDELO_DIR` to point elsewhere).
  *   2. `server.fs.allow` is extended to the repo root so the worker
  *      can pull `BrowserKernel`, the nested kernel-worker entry, and
  *      binary assets from the neighbouring submodule.
@@ -38,24 +38,24 @@ import { buildVersionPlugin } from '../../vite-extensions/vite-build-version';
 import virtualModule from '../../vite-extensions/vite-virtual-module';
 
 /**
- * Resolve the wasm-posix-kernel checkout. Mirrors the CLI's
+ * Resolve the kandelo checkout. Mirrors the CLI's
  * `host-bridge.ts` precedence: env var wins, falls back to the bundled
  * submodule. Vite needs an absolute path because resolution happens
  * here at config load, before the worker exists.
  */
 function resolveKernelDir(): string {
-	const env = process.env['WASM_POSIX_KERNEL_DIR'];
+	const env = process.env['KANDELO_DIR'];
 	if (env && existsSync(join(env, 'host'))) {
 		return env;
 	}
-	return resolve(__dirname, '../../../wasm-posix-kernel');
+	return resolve(__dirname, '../../../kandelo');
 }
 
 /**
  * Resolve `@kernel-wasm?url`, `@rootfs-vfs?url`, and
  * `@kernel-binary/<rel>?url` imports against the kernel checkout.
  * Mirrors the alias scheme used by
- * `wasm-posix-kernel/examples/browser/vite.config.ts` so the demo's
+ * `kandelo/examples/browser/vite.config.ts` so the demo's
  * `BrowserKernel` / `kernel-worker-entry.ts` imports work unchanged
  * when re-exported from `posix-kernel/host-bridge.ts`.
  *
@@ -87,7 +87,7 @@ function resolveKernelBinariesPlugin(): Plugin {
 	}
 
 	return {
-		name: 'wasm-posix-kernel-binaries',
+		name: 'kandelo-binaries',
 		enforce: 'pre',
 		resolveId(source) {
 			// Vite passes the suffix (`?url`, `?worker&url`, …) through
@@ -108,7 +108,7 @@ function resolveKernelBinariesPlugin(): Plugin {
 				} else {
 					this.error(
 						`rootfs.vfs not found at ${candidate}. ` +
-							'Run `bash build.sh` from the wasm-posix-kernel ' +
+							'Run `bash build.sh` from the kandelo ' +
 							'checkout to produce it.'
 					);
 				}
@@ -127,7 +127,7 @@ function resolveKernelBinariesPlugin(): Plugin {
  */
 function aliasRemoteHtmlPlugin(): Plugin {
 	return {
-		name: 'wasm-posix-kernel-remote-html-alias',
+		name: 'kandelo-remote-html-alias',
 		configureServer(server) {
 			server.middlewares.use((req, _res, next) => {
 				// The website constructs the iframe URL as
@@ -156,7 +156,7 @@ function aliasRemoteHtmlPlugin(): Plugin {
 function aliasClientIndexPlugin(): Plugin {
 	const clientIndex = resolve(__dirname, '../client/src/index.ts');
 	return {
-		name: 'wasm-posix-kernel-client-index-alias',
+		name: 'kandelo-client-index-alias',
 		configureServer(server) {
 			server.middlewares.use((req, _res, next) => {
 				const raw = req.url || '';
@@ -219,14 +219,14 @@ export default defineConfig(() => {
 		publicDir: new URL('../wordpress-builds/public', import.meta.url)
 			.pathname,
 
-		// Runtime side of the `@wasm-posix-kernel/*` alias whose TS
-		// counterpart lives in `src/lib/posix-kernel/wasm-posix-kernel.d.ts`.
+		// Runtime side of the `@kandelo/*` alias whose TS
+		// counterpart lives in `src/lib/posix-kernel/kandelo.d.ts`.
 		// The shim keeps the submodule out of our strict typecheck; this
 		// alias resolves the same specifiers to the actual files.
 		resolve: {
 			alias: [
 				{
-					find: /^@wasm-posix-kernel\/(.*)$/,
+					find: /^@kandelo\/(.*)$/,
 					replacement: resolve(resolveKernelDir(), '$1'),
 				},
 			],
@@ -266,7 +266,7 @@ export default defineConfig(() => {
 				 * issues outbound HTTPS through its TLS-MITM backend,
 				 * which fetches `/cors-proxy?url=<encoded>` relative to
 				 * the worker — see
-				 * `wasm-posix-kernel/examples/browser/lib/
+				 * `kandelo/examples/browser/lib/
 				 * kernel-worker-entry.ts:299`. The base `/cors-proxy`
 				 * proxy here would forward unchanged and `cors-proxy.php`
 				 * would 404 that shape; mirror the rewrite from
@@ -294,9 +294,11 @@ export default defineConfig(() => {
 			},
 			fs: {
 				// Extend to the repo root so the worker can resolve
-				// `wasm-posix-kernel/host/src/**` and
-				// `wasm-posix-kernel/examples/browser/lib/**`.
-				allow: ['../../../'],
+				// `kandelo/host/src/**` and
+				// `kandelo/apps/browser-demos/lib/**`. When `KANDELO_DIR`
+				// points at a checkout outside the repo (e.g. a sibling
+				// worktree with pre-built binaries), include it too.
+				allow: ['../../../', resolveKernelDir()],
 			},
 		},
 

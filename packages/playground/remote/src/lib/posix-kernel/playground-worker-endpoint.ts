@@ -1,7 +1,7 @@
 /**
  * Comlink worker endpoint for the `--experimental-posix-kernel`
  * browser mode. Parallel to `playground-worker-endpoint-blueprints-
- * v1.ts`, but the engine behind every method is the wasm-posix-kernel
+ * v1.ts`, but the engine behind every method is the kandelo
  * (nginx + php-fpm in a Web Worker) instead of the in-process
  * `PHPRequestHandler` + `@php-wasm/web` runtime.
  *
@@ -256,7 +256,7 @@ export class KernelPlaygroundWorkerEndpoint {
 		//      naked path.
 		//   2. Reduce to **origin-form** (path + query + fragment).
 		//      `buildRawHttpRequest` in
-		//      `wasm-posix-kernel/examples/browser/lib/
+		//      `kandelo/examples/browser/lib/
 		//      kernel-worker-entry.ts:1130` writes the URL verbatim
 		//      onto the request line: `GET <url> HTTP/1.1`. Passing
 		//      a full `http://127.0.0.1:5400/...` (absolute-URI form)

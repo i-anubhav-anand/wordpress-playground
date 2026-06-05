@@ -20,7 +20,7 @@ interface SharedArrayBufferConstructor {
 	): SharedArrayBuffer;
 }
 
-declare module '@wasm-posix-kernel/*' {
+declare module '@kandelo/*' {
 	export const BrowserKernel: any;
 	export type BrowserKernel = any;
 	export const HttpBridgeHost: any;
